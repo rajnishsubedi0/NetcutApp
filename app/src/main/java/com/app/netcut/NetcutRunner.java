@@ -53,9 +53,7 @@ public class NetcutRunner {
         this.stateListener = stateListener;
     }
 
-    // ------------------------------------------------------------------
-    // Lifecycle
-    // ------------------------------------------------------------------
+
 
     public synchronized void init() throws Exception {
         if (shell != null && shell.isAlive()) return;
@@ -248,12 +246,8 @@ public class NetcutRunner {
     }
 
     public boolean isRunning() { return running.get(); }
-    public int getPid() { return netcutPid; }
-    public LaunchMode getLaunchMode() { return launchMode; }
 
-    // ------------------------------------------------------------------
-    // Log tailing (optimized)
-    // ------------------------------------------------------------------
+
 
     private void startLogTail() {
         tailFuture = ioExecutor.submit(() -> {
@@ -316,9 +310,6 @@ public class NetcutRunner {
         });
     }
 
-    // ------------------------------------------------------------------
-    // Launch helpers
-    // ------------------------------------------------------------------
 
     private LaunchMode detectLaunchMode() throws Exception {
         if (commandExists("setsid")) return LaunchMode.SETSID;
@@ -361,9 +352,7 @@ public class NetcutRunner {
         }
     }
 
-    // ------------------------------------------------------------------
-    // PID helpers
-    // ------------------------------------------------------------------
+
 
     private int waitForPidFile(long timeoutMs) throws Exception {
         long end = SystemClock.uptimeMillis() + timeoutMs;

@@ -29,24 +29,7 @@ public class NetUtils {
                 (ip >> 16 & 0xff), (ip >> 24 & 0xff));
     }
 
-    /** Read /proc/net/arp to enrich scan results with MAC addresses. */
-    public static List<String[]> readArpTable() {
-        List<String[]> out = new ArrayList<>();
-        try (BufferedReader br = new BufferedReader(new FileReader("/proc/net/arp"))) {
-            String line;
-            br.readLine(); // header
-            while ((line = br.readLine()) != null) {
-                String[] parts = line.split("\\s+");
-                if (parts.length >= 6) {
-                    // ip, hw_type, flags, mac, mask, device
-                    if (!"00:00:00:00:00:00".equals(parts[3])) {
-                        out.add(new String[]{parts[0], parts[3], parts[5]});
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-        return out;
-    }
+
 
     /** Quick ping to populate ARP cache. */
     public static boolean ping(String ip, int timeoutMs) {

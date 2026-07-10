@@ -10,17 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Singleton wrapper around libsu's {@link Shell}.
- *
- * Changes vs. previous version:
- *  - executeCommand() now returns "" for empty output (was null).
- *    Empty output is a valid result; callers can check .isEmpty() themselves.
- *  - close() no longer nulls the singleton instance — other components may
- *    still hold a reference and would NPE on subsequent calls.
- *  - Added executeCommandResult() that returns the full Shell.Result for
- *    callers that need stdout + stderr + exit code together.
- */
+
 public class RootShellManager {
 
     private static final String TAG = "RootShellManager";
@@ -42,13 +32,7 @@ public class RootShellManager {
         return instance;
     }
 
-    /** Visible for testing / re-init after a shell crash. */
-    public static synchronized void resetInstance() {
-        if (instance != null) {
-            instance.closeInternal();
-            instance = null;
-        }
-    }
+
 
     private synchronized void initializeShell() {
         try {
@@ -148,25 +132,6 @@ public class RootShellManager {
         }
     }
 
-    public boolean executeCommands(String... commands) {
-        if (!isShellAvailable()) {
-            Log.w(TAG, "Root shell not available");
-            return false;
-        }
-        try {
-            for (String command : commands) {
-                Shell.Result result = Shell.cmd(command).exec();
-                if (!result.isSuccess()) {
-                    Log.w(TAG, "Command failed: " + command + " code=" + result.getCode());
-                    return false;
-                }
-            }
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to execute commands", e);
-            return false;
-        }
-    }
 
     public boolean hasRootAccess() {
         if (!isShellAvailable()) return false;
@@ -211,23 +176,4 @@ public class RootShellManager {
         isShellAvailable.set(false);
     }
 
-    public synchronized void reinitializeIfNeeded() {
-        if (!isShellAvailable()) {
-            Log.d(TAG, "Reinitializing root shell");
-            initializeShell();
-        }
-    }
-
-    public boolean testShell() {
-        if (!isShellAvailable()) return false;
-        try {
-            Shell.Result result = Shell.cmd("echo test").exec();
-            return result.isSuccess()
-                    && !result.getOut().isEmpty()
-                    && "test".equals(result.getOut().get(0));
-        } catch (Exception e) {
-            Log.e(TAG, "Shell test failed", e);
-            return false;
-        }
-    }
 }

@@ -10,15 +10,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * A single long-lived `su` process used to run the netcut binary.
- *
- * Changes vs. previous version:
- *  - exec() now has a timeout (default 30 s). A true timeout is enforced via
- *    a reader thread + join(); if the command hangs, an IOException is thrown.
- *  - finalize() removed (deprecated & unreliable). Call close() explicitly.
- *  - Stderr drainer is now a proper daemon thread with a clear name.
- */
 public class PersistentRootShell implements Closeable {
 
     private static final long DEFAULT_TIMEOUT_MS = 30_000L;
@@ -169,9 +160,7 @@ public class PersistentRootShell implements Closeable {
         }
     }
 
-    public String execCapture(String command) throws IOException {
-        return exec(command).joinedStdout();
-    }
+
 
     public boolean isAlive() {
         if (closed.get() || suProcess == null) return false;
@@ -183,9 +172,7 @@ public class PersistentRootShell implements Closeable {
         }
     }
 
-    public void destroy() {
-        close();
-    }
+
 
     private void ensureOpen() throws IOException {
         if (closed.get() || suProcess == null || !isAlive()) {

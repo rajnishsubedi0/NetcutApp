@@ -15,8 +15,8 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ArpRestore {
 
     private static final String TAG = "ArpRestore";
-    private static final int BATCH_SIZE = 50;  // Increased from 20
-    private static final long SHORT_CIRCUIT_MS = 50L;  // Reduced from 100ms
+
+    private static final long SHORT_CIRCUIT_MS = 50L;
 
     private static ArpRestore instance;
 
@@ -24,7 +24,7 @@ public class ArpRestore {
     private final Map<String, String> arpDevices = new HashMap<>();
     private final Object lock = new Object();
 
-    private final Context context;
+
     private final AtomicBoolean isRestoring = new AtomicBoolean(false);
     private final ReentrantLock restoreLock = new ReentrantLock();
 
@@ -34,8 +34,8 @@ public class ArpRestore {
     private long lastRestoreTime = 0;
     private boolean lastRestoreSuccess = false;
 
-    private ArpRestore(Context context) {
-        this.context = context.getApplicationContext();
+    private ArpRestore( ) {
+
         this.shellManager = RootShellManager.getInstance();
         detectInterface();
         loadArpCache();
@@ -43,7 +43,7 @@ public class ArpRestore {
 
     public static synchronized ArpRestore getInstance(Context context) {
         if (instance == null) {
-            instance = new ArpRestore(context);
+            instance = new ArpRestore();
         }
         return instance;
     }
@@ -104,66 +104,7 @@ public class ArpRestore {
         }
     }
 
-    boolean forceRedirectToRouter() {
-        try {
-            String gateway = NetUtils.getGatewayIp(context);
-            if (gateway == null || gateway.isEmpty()) {
-                Log.w(TAG, "No gateway detected for redirect");
-                return false;
-            }
 
-            // Grab router MAC
-            List<String> lines = shellManager.executeCommandLines("ip neigh show " + shQ(gateway));
-            String routerMac = null;
-            for (String line : lines) {
-                if (line.contains("lladdr")) {
-                    routerMac = line.split("lladdr")[1].trim().split("\\s+")[0];
-                    break;
-                }
-            }
-
-            if (routerMac == null || routerMac.equals("00:00:00:00:00:00")) {
-                Log.d(TAG, "Router MAC not found, attempt ARP ping");
-                shellManager.executeCommandBool("ping -c1 -W1 " + shQ(gateway) + " > /dev/null 2>&1");
-                lines = shellManager.executeCommandLines("ip neigh show " + shQ(gateway));
-                for (String line : lines) {
-                    if (line.contains("lladdr")) {
-                        routerMac = line.split("lladdr")[1].trim().split("\\s+")[0];
-                        break;
-                    }
-                }
-            }
-
-            if (routerMac == null) {
-                Log.w(TAG, "Failed to detect router MAC for redirect");
-                return false;
-            }
-
-            Log.d(TAG, "Pre-redirecting all IPs to router " + routerMac);
-            StringBuilder cmd = new StringBuilder();
-            synchronized (lock) {
-                for (String ip : arpCache.keySet()) {
-                    if (ip.equals(gateway)) continue;
-                    String dev = arpDevices.get(ip);
-                    if (dev == null || dev.isEmpty()) dev = interfaceName;
-
-                    cmd.append("ip neigh replace ")
-                            .append(shQ(ip)).append(" lladdr ")
-                            .append(shQ(routerMac)).append(" dev ")
-                            .append(shQ(dev)).append(" nud reachable 2>/dev/null; ");
-                }
-            }
-            shellManager.executeCommandBool(cmd.toString());
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Redirect to router failed", e);
-            return false;
-        }
-    }
-
-    /**
-     * FAST flush + restore - optimized and pre-seeded with router redirect
-     */
 
     private boolean loadArpWithIpNeigh() {
         try {
@@ -239,105 +180,8 @@ public class ArpRestore {
         }
     }
 
-    public boolean restoreArpEntry(String ip) {
-        synchronized (lock) {
-            String mac = arpCache.get(ip);
-            if (mac == null) {
-                Log.w(TAG, "No cached ARP entry for " + ip);
-                return false;
-            }
-            String dev = arpDevices.get(ip);
-            return restoreArpEntryInternal(ip, mac, dev);
-        }
-    }
+   
 
-    public boolean restoreArpEntry(String ip, String mac) {
-        synchronized (lock) {
-            String dev = arpDevices.get(ip);
-            return restoreArpEntryInternal(ip, mac, dev);
-        }
-    }
-
-    private boolean restoreArpEntryInternal(String ip, String mac, String dev) {
-        try {
-            if (dev == null || dev.isEmpty()) dev = interfaceName;
-            String cmd = "ip neigh replace " + shQ(ip)
-                    + " lladdr " + shQ(mac)
-                    + " dev " + shQ(dev)
-                    + " nud permanent";
-            return shellManager.executeCommandBool(cmd);
-        } catch (Exception e) {
-            Log.e(TAG, "Error restoring ARP for " + ip, e);
-            return false;
-        }
-    }
-
-    /**
-     * FAST restore - uses a single shell command with all entries
-     * This is MUCH faster than batched execution
-     */
-    public boolean restoreAllArpEntriesFast() {
-        boolean locked = false;
-        try {
-            locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
-            if (!locked) return false;
-            if (!isRestoring.compareAndSet(false, true)) return false;
-
-            final Map<String, String> cacheSnapshot;
-            final Map<String, String> devSnapshot;
-            synchronized (lock) {
-                cacheSnapshot = new HashMap<>(arpCache);
-                devSnapshot = new HashMap<>(arpDevices);
-            }
-
-            int totalEntries = cacheSnapshot.size();
-            if (totalEntries == 0) {
-                lastRestoreSuccess = false;
-                lastRestoreTime = System.currentTimeMillis();
-                return false;
-            }
-
-            // Build a single command with all entries
-            StringBuilder cmd = new StringBuilder();
-            for (Map.Entry<String, String> entry : cacheSnapshot.entrySet()) {
-                String ip = entry.getKey();
-                String mac = entry.getValue();
-                String dev = devSnapshot.get(ip);
-                if (dev == null || dev.isEmpty()) dev = interfaceName;
-
-                cmd.append("ip neigh replace ")
-                        .append(shQ(ip)).append(" lladdr ")
-                        .append(shQ(mac)).append(" dev ")
-                        .append(shQ(dev)).append(" nud permanent 2>/dev/null; ");
-            }
-
-            boolean success = shellManager.executeCommandBool(cmd.toString());
-            lastRestoreSuccess = success;
-            lastRestoreTime = System.currentTimeMillis();
-            Log.d(TAG, "Fast restore: " + (success ? "✅" : "❌") + " " + totalEntries + " entries");
-            return success;
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error in fast restore", e);
-            lastRestoreSuccess = false;
-            return false;
-        } finally {
-            isRestoring.set(false);
-            if (locked) {
-                try { restoreLock.unlock(); }
-                catch (IllegalMonitorStateException ignored) {}
-            }
-        }
-    }
-
-    // Keep original for compatibility
-    public boolean restoreAllArpEntries() {
-        return restoreAllArpEntriesFast();
-    }
-
-    /**
-     * FAST flush + restore - optimized for speed
-     */
     public boolean flushAndRestoreFast() {
         long now = System.currentTimeMillis();
         if (now - lastRestoreTime < SHORT_CIRCUIT_MS) {
@@ -410,14 +254,9 @@ public class ArpRestore {
         }
     }
 
-    // Keep original for compatibility
-    public boolean flushAndRestore() {
-        return flushAndRestoreFast();
-    }
-
     private boolean flushArpCacheFast() {
         try {
-            // Single command to flush - no waiting
+
             shellManager.executeCommandBool("ip neigh flush all 2>/dev/null");
             return true;
         } catch (Exception e) {
@@ -426,61 +265,7 @@ public class ArpRestore {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Accessors
-    // ------------------------------------------------------------------
-
-    public String getCachedMac(String ip) {
-        synchronized (lock) { return arpCache.get(ip); }
-    }
 
     public void refreshCache() { loadArpCache(); }
 
-    public boolean hasCachedEntry(String ip) {
-        synchronized (lock) { return arpCache.containsKey(ip); }
-    }
-
-    public int getCacheSize() {
-        synchronized (lock) { return arpCache.size(); }
-    }
-
-    public void setInterface(String iface) {
-        if (iface != null && !iface.trim().isEmpty()) {
-            this.interfaceName = iface.trim();
-        }
-    }
-
-    public String getInterface() { return interfaceName; }
-
-    public boolean isRestoring() { return isRestoring.get(); }
-
-    public void clearCache() {
-        synchronized (lock) {
-            arpCache.clear();
-            arpDevices.clear();
-        }
-    }
-
-    public boolean waitForRestoreComplete(long timeoutMs) {
-        long start = System.currentTimeMillis();
-        while (isRestoring.get() && (System.currentTimeMillis() - start) < timeoutMs) {
-            try { Thread.sleep(20); }
-            catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return !isRestoring.get();
-    }
-
-    public void resetState() {
-        restoreLock.lock();
-        try {
-            isRestoring.set(false);
-            lastRestoreTime = 0;
-            lastRestoreSuccess = false;
-        } finally {
-            restoreLock.unlock();
-        }
-    }
 }
