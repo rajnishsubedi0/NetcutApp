@@ -25,9 +25,9 @@ public class NetcutRunner {
 
     public enum LaunchMode { SETSID, NOHUP, PLAIN_BG }
 
-    private final Context context;
-    private final LogListener logListener;
-    private final StateListener stateListener;
+    private  Context context;
+    private  LogListener logListener;
+    private  StateListener stateListener;
 
     private final ExecutorService ioExecutor = Executors.newFixedThreadPool(2);
 
@@ -44,7 +44,7 @@ public class NetcutRunner {
     private volatile String netcutPath;
     private volatile int netcutPid = -1;
     private volatile LaunchMode launchMode;
-
+    public  NetcutRunner(){}
     public NetcutRunner(Context context,
                         LogListener logListener,
                         StateListener stateListener) {

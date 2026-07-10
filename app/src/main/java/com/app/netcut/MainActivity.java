@@ -1,13 +1,14 @@
 package com.app.netcut;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import android.view.View;
+
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -86,6 +87,8 @@ public class MainActivity extends AppCompatActivity {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
             return insets;
         });
+        startService(new Intent(this, CleanupService.class));
+
         initializeViews();
         initializeShellManager();
         initializeArpRestore();
@@ -130,6 +133,7 @@ public class MainActivity extends AppCompatActivity {
 
         Log.d(TAG, "onDestroy - final cleanup...");
         stopCleanupTimer();
+
         forceKillNetcutFast();
 
         if (runner != null) {
