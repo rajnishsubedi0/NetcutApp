@@ -104,7 +104,7 @@ public class ArpRestore {
         }
     }
 
-    private boolean forceRedirectToRouter() {
+    boolean forceRedirectToRouter() {
         try {
             String gateway = NetUtils.getGatewayIp(context);
             if (gateway == null || gateway.isEmpty()) {
@@ -164,7 +164,7 @@ public class ArpRestore {
     /**
      * FAST flush + restore - optimized and pre-seeded with router redirect
      */
-    
+
     private boolean loadArpWithIpNeigh() {
         try {
             List<String> lines = shellManager.executeCommandLines("ip neigh show");

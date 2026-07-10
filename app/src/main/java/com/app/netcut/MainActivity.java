@@ -127,6 +127,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+
         Log.d(TAG, "onDestroy - final cleanup...");
         stopCleanupTimer();
         forceKillNetcutFast();
