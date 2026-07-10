@@ -104,6 +104,67 @@ public class ArpRestore {
         }
     }
 
+    private boolean forceRedirectToRouter() {
+        try {
+            String gateway = NetUtils.getGatewayIp(context);
+            if (gateway == null || gateway.isEmpty()) {
+                Log.w(TAG, "No gateway detected for redirect");
+                return false;
+            }
+
+            // Grab router MAC
+            List<String> lines = shellManager.executeCommandLines("ip neigh show " + shQ(gateway));
+            String routerMac = null;
+            for (String line : lines) {
+                if (line.contains("lladdr")) {
+                    routerMac = line.split("lladdr")[1].trim().split("\\s+")[0];
+                    break;
+                }
+            }
+
+            if (routerMac == null || routerMac.equals("00:00:00:00:00:00")) {
+                Log.d(TAG, "Router MAC not found, attempt ARP ping");
+                shellManager.executeCommandBool("ping -c1 -W1 " + shQ(gateway) + " > /dev/null 2>&1");
+                lines = shellManager.executeCommandLines("ip neigh show " + shQ(gateway));
+                for (String line : lines) {
+                    if (line.contains("lladdr")) {
+                        routerMac = line.split("lladdr")[1].trim().split("\\s+")[0];
+                        break;
+                    }
+                }
+            }
+
+            if (routerMac == null) {
+                Log.w(TAG, "Failed to detect router MAC for redirect");
+                return false;
+            }
+
+            Log.d(TAG, "Pre-redirecting all IPs to router " + routerMac);
+            StringBuilder cmd = new StringBuilder();
+            synchronized (lock) {
+                for (String ip : arpCache.keySet()) {
+                    if (ip.equals(gateway)) continue;
+                    String dev = arpDevices.get(ip);
+                    if (dev == null || dev.isEmpty()) dev = interfaceName;
+
+                    cmd.append("ip neigh replace ")
+                            .append(shQ(ip)).append(" lladdr ")
+                            .append(shQ(routerMac)).append(" dev ")
+                            .append(shQ(dev)).append(" nud reachable 2>/dev/null; ");
+                }
+            }
+            shellManager.executeCommandBool(cmd.toString());
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Redirect to router failed", e);
+            return false;
+        }
+    }
+
+    /**
+     * FAST flush + restore - optimized and pre-seeded with router redirect
+     */
+    
     private boolean loadArpWithIpNeigh() {
         try {
             List<String> lines = shellManager.executeCommandLines("ip neigh show");
