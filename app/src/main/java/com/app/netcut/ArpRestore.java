@@ -12,12 +12,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
-
 public class ArpRestore {
 
     private static final String TAG = "ArpRestore";
-    private static final int BATCH_SIZE = 20;
-    private static final long SHORT_CIRCUIT_MS = 100L;
+    private static final int BATCH_SIZE = 50;  // Increased from 20
+    private static final long SHORT_CIRCUIT_MS = 50L;  // Reduced from 100ms
 
     private static ArpRestore instance;
 
@@ -49,13 +48,8 @@ public class ArpRestore {
         return instance;
     }
 
-    // ------------------------------------------------------------------
-    // Interface detection (improved)
-    // ------------------------------------------------------------------
-
     private void detectInterface() {
         try {
-            // Method 1: System property
             String iface = System.getProperty("wifi.interface");
             if (iface != null && !iface.trim().isEmpty()) {
                 interfaceName = iface.trim();
@@ -63,7 +57,6 @@ public class ArpRestore {
                 return;
             }
 
-            // Method 2: Check via ip link
             if (shellManager != null && shellManager.isShellAvailable()) {
                 List<String> lines = shellManager.executeCommandLines("ip link show");
                 for (String line : lines) {
@@ -77,7 +70,6 @@ public class ArpRestore {
                     }
                 }
 
-                // Method 3: Check for eth0 (some devices use this)
                 String result = shellManager.executeCommand("ls /sys/class/net/");
                 if (result != null) {
                     for (String name : result.split("\\s+")) {
@@ -89,16 +81,11 @@ public class ArpRestore {
                     }
                 }
             }
-
             Log.w(TAG, "Could not detect interface, using default: " + interfaceName);
         } catch (Exception e) {
             Log.w(TAG, "Interface detection failed, using default: " + interfaceName, e);
         }
     }
-
-    // ------------------------------------------------------------------
-    // Cache loading (improved)
-    // ------------------------------------------------------------------
 
     public void loadArpCache() {
         synchronized (lock) {
@@ -106,17 +93,11 @@ public class ArpRestore {
             arpDevices.clear();
             try {
                 Log.d(TAG, "Loading ARP cache...");
-
-                // Try ip neigh first
                 if (!loadArpWithIpNeigh()) {
                     Log.d(TAG, "ip neigh failed, trying /proc/net/arp");
                     loadArpWithProcFs();
                 }
-
                 Log.d(TAG, "Loaded " + arpCache.size() + " ARP entries");
-                if (arpCache.isEmpty()) {
-                    Log.w(TAG, "ARP cache is empty! Restore may not work.");
-                }
             } catch (Exception e) {
                 Log.e(TAG, "Failed to load ARP cache", e);
             }
@@ -127,7 +108,6 @@ public class ArpRestore {
         try {
             List<String> lines = shellManager.executeCommandLines("ip neigh show");
             if (lines == null || lines.isEmpty()) {
-                Log.w(TAG, "ip neigh show returned no lines");
                 return false;
             }
 
@@ -169,7 +149,6 @@ public class ArpRestore {
         try {
             List<String> lines = shellManager.executeCommandLines("cat /proc/net/arp");
             if (lines == null || lines.isEmpty()) {
-                Log.w(TAG, "/proc/net/arp returned no lines");
                 return;
             }
 
@@ -199,10 +178,6 @@ public class ArpRestore {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Single-entry restore
-    // ------------------------------------------------------------------
-
     public boolean restoreArpEntry(String ip) {
         synchronized (lock) {
             String mac = arpCache.get(ip);
@@ -225,51 +200,27 @@ public class ArpRestore {
     private boolean restoreArpEntryInternal(String ip, String mac, String dev) {
         try {
             if (dev == null || dev.isEmpty()) dev = interfaceName;
-            Log.d(TAG, "Restoring ARP: " + ip + " -> " + mac + " dev=" + dev);
-
             String cmd = "ip neigh replace " + shQ(ip)
                     + " lladdr " + shQ(mac)
                     + " dev " + shQ(dev)
                     + " nud permanent";
-
-            boolean success = shellManager.executeCommandBool(cmd);
-            if (success) {
-                Log.d(TAG, "ARP restored via ip neigh: " + ip);
-                return true;
-            }
-
-            // Fallback for very old kernels
-            cmd = "arp -s " + shQ(ip) + " " + shQ(mac);
-            success = shellManager.executeCommandBool(cmd);
-            if (success) {
-                Log.d(TAG, "ARP restored via arp: " + ip);
-                return true;
-            }
-
-            Log.e(TAG, "Failed to restore ARP for " + ip);
-            return false;
+            return shellManager.executeCommandBool(cmd);
         } catch (Exception e) {
             Log.e(TAG, "Error restoring ARP for " + ip, e);
             return false;
         }
     }
 
-    // ------------------------------------------------------------------
-    // Bulk restore (batched)
-    // ------------------------------------------------------------------
-
-    public boolean restoreAllArpEntries() {
+    /**
+     * FAST restore - uses a single shell command with all entries
+     * This is MUCH faster than batched execution
+     */
+    public boolean restoreAllArpEntriesFast() {
         boolean locked = false;
         try {
-            locked = restoreLock.tryLock(2, TimeUnit.SECONDS);
-            if (!locked) {
-                Log.w(TAG, "Could not acquire lock for ARP restoration");
-                return false;
-            }
-            if (!isRestoring.compareAndSet(false, true)) {
-                Log.w(TAG, "Already restoring ARP");
-                return false;
-            }
+            locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
+            if (!locked) return false;
+            if (!isRestoring.compareAndSet(false, true)) return false;
 
             final Map<String, String> cacheSnapshot;
             final Map<String, String> devSnapshot;
@@ -279,59 +230,34 @@ public class ArpRestore {
             }
 
             int totalEntries = cacheSnapshot.size();
-            Log.d(TAG, "Restoring all ARP entries... (" + totalEntries + " entries)");
-
             if (totalEntries == 0) {
-                Log.w(TAG, "ARP cache is empty! Nothing to restore.");
                 lastRestoreSuccess = false;
                 lastRestoreTime = System.currentTimeMillis();
                 return false;
             }
 
-            // Build a single shell script that runs many `ip neigh replace`
-            StringBuilder batch = new StringBuilder();
-            int batchSize = 0;
-            int successCount = 0;
-
+            // Build a single command with all entries
+            StringBuilder cmd = new StringBuilder();
             for (Map.Entry<String, String> entry : cacheSnapshot.entrySet()) {
                 String ip = entry.getKey();
                 String mac = entry.getValue();
                 String dev = devSnapshot.get(ip);
                 if (dev == null || dev.isEmpty()) dev = interfaceName;
 
-                batch.append("ip neigh replace ")
+                cmd.append("ip neigh replace ")
                         .append(shQ(ip)).append(" lladdr ")
                         .append(shQ(mac)).append(" dev ")
-                        .append(shQ(dev)).append(" nud permanent;");
-
-                if (++batchSize >= BATCH_SIZE) {
-                    if (shellManager.executeCommandBool(batch.toString())) {
-                        successCount += batchSize;
-                    }
-                    batch.setLength(0);
-                    batchSize = 0;
-                }
-            }
-            if (batch.length() > 0) {
-                if (shellManager.executeCommandBool(batch.toString())) {
-                    successCount += batchSize;
-                }
+                        .append(shQ(dev)).append(" nud permanent 2>/dev/null; ");
             }
 
-            boolean success = successCount > 0
-                    && successCount >= Math.ceil(totalEntries * 0.7);
+            boolean success = shellManager.executeCommandBool(cmd.toString());
             lastRestoreSuccess = success;
             lastRestoreTime = System.currentTimeMillis();
-            Log.d(TAG, "Restored " + successCount + "/" + totalEntries
-                    + " ARP entries (success=" + success + ")");
+            Log.d(TAG, "Fast restore: " + (success ? "✅" : "❌") + " " + totalEntries + " entries");
             return success;
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            Log.e(TAG, "Interrupted while waiting for restore lock", e);
-            return false;
         } catch (Exception e) {
-            Log.e(TAG, "Error restoring ARP entries", e);
+            Log.e(TAG, "Error in fast restore", e);
             lastRestoreSuccess = false;
             return false;
         } finally {
@@ -343,31 +269,27 @@ public class ArpRestore {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Flush + restore (improved)
-    // ------------------------------------------------------------------
+    // Keep original for compatibility
+    public boolean restoreAllArpEntries() {
+        return restoreAllArpEntriesFast();
+    }
 
-    public boolean flushAndRestore() {
+    /**
+     * FAST flush + restore - optimized for speed
+     */
+    public boolean flushAndRestoreFast() {
         long now = System.currentTimeMillis();
-        // Reduced from 500ms to 100ms — only skip if called in rapid succession
-        if (now - lastRestoreTime < 100) {
-            Log.d(TAG, "Using cached restoration result (called within 100ms)");
+        if (now - lastRestoreTime < SHORT_CIRCUIT_MS) {
+            Log.d(TAG, "Using cached result (called within " + SHORT_CIRCUIT_MS + "ms)");
             return lastRestoreSuccess;
         }
 
         boolean locked = false;
         try {
-            locked = restoreLock.tryLock(3, TimeUnit.SECONDS);
-            if (!locked) {
-                Log.w(TAG, "Could not acquire lock for flushAndRestore");
-                return false;
-            }
-            if (!isRestoring.compareAndSet(false, true)) {
-                Log.w(TAG, "Already restoring ARP");
-                return false;
-            }
+            locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
+            if (!locked) return false;
+            if (!isRestoring.compareAndSet(false, true)) return false;
 
-            // Take a snapshot of the cache
             Map<String, String> cacheSnapshot;
             Map<String, String> devSnapshot;
             synchronized (lock) {
@@ -376,88 +298,46 @@ public class ArpRestore {
             }
 
             int totalEntries = cacheSnapshot.size();
-            Log.d(TAG, "flushAndRestore: snapshot size=" + totalEntries);
-
-            // If cache is empty, try to repopulate from live system
             if (totalEntries == 0) {
-                Log.w(TAG, "ARP cache is empty! Reloading from system...");
                 loadArpCache();
                 synchronized (lock) {
                     cacheSnapshot = new HashMap<>(arpCache);
                     devSnapshot = new HashMap<>(arpDevices);
                 }
                 totalEntries = cacheSnapshot.size();
-                Log.d(TAG, "After reload, cache size=" + totalEntries);
-
                 if (totalEntries == 0) {
-                    Log.e(TAG, "ARP cache still empty. Nothing to restore.");
                     lastRestoreSuccess = false;
                     lastRestoreTime = System.currentTimeMillis();
                     return false;
                 }
             }
 
-            // Flush the poisoned ARP cache
-            Log.d(TAG, "Flushing ARP cache...");
-            boolean flushed = flushArpCache();
-            Log.d(TAG, "Flush result: " + flushed);
+            // Flush - minimal wait
+            boolean flushed = flushArpCacheFast();
 
-            // Wait for kernel to process the flush
-            try { Thread.sleep(500); }
-            catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                lastRestoreSuccess = false;
-                return false;
-            }
-
-            // Restore entries in batches
-            Log.d(TAG, "Restoring " + totalEntries + " ARP entries...");
-            StringBuilder batch = new StringBuilder();
-            int batchSize = 0;
-            int successCount = 0;
-
+            // Build single command for restore
+            StringBuilder cmd = new StringBuilder();
             for (Map.Entry<String, String> entry : cacheSnapshot.entrySet()) {
                 String ip = entry.getKey();
                 String mac = entry.getValue();
                 String dev = devSnapshot.get(ip);
                 if (dev == null || dev.isEmpty()) dev = interfaceName;
 
-                batch.append("ip neigh replace ")
+                cmd.append("ip neigh replace ")
                         .append(shQ(ip)).append(" lladdr ")
                         .append(shQ(mac)).append(" dev ")
-                        .append(shQ(dev)).append(" nud permanent;");
-
-                if (++batchSize >= 20) {
-                    if (shellManager.executeCommandBool(batch.toString())) {
-                        successCount += batchSize;
-                    }
-                    batch.setLength(0);
-                    batchSize = 0;
-                }
-            }
-            if (batch.length() > 0) {
-                if (shellManager.executeCommandBool(batch.toString())) {
-                    successCount += batchSize;
-                }
+                        .append(shQ(dev)).append(" nud permanent 2>/dev/null; ");
             }
 
-            boolean restored = successCount > 0
-                    && successCount >= Math.ceil(totalEntries * 0.7);
+            boolean restored = shellManager.executeCommandBool(cmd.toString());
 
             lastRestoreTime = System.currentTimeMillis();
             lastRestoreSuccess = flushed && restored;
-
-            Log.d(TAG, "flushAndRestore complete: flushed=" + flushed
-                    + ", restored=" + restored
-                    + " (" + successCount + "/" + totalEntries + ")");
+            Log.d(TAG, "Fast flush+restore: " + (lastRestoreSuccess ? "✅" : "❌"));
             return lastRestoreSuccess;
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            Log.e(TAG, "Interrupted", e);
-            return false;
         } catch (Exception e) {
-            Log.e(TAG, "Failed", e);
+            Log.e(TAG, "Fast flush+restore failed", e);
             lastRestoreSuccess = false;
             return false;
         } finally {
@@ -469,32 +349,18 @@ public class ArpRestore {
         }
     }
 
-    private boolean flushArpCache() {
+    // Keep original for compatibility
+    public boolean flushAndRestore() {
+        return flushAndRestoreFast();
+    }
+
+    private boolean flushArpCacheFast() {
         try {
-            Log.d(TAG, "Attempting to flush ARP via ip neigh flush all");
-            if (shellManager.executeCommandBool("ip neigh flush all")) {
-                Log.d(TAG, "✅ Flushed ARP via ip neigh flush all");
-                return true;
-            }
-
-            Log.d(TAG, "Attempting to flush ARP via ip -s neigh flush all");
-            if (shellManager.executeCommandBool("ip -s neigh flush all")) {
-                Log.d(TAG, "✅ Flushed ARP via ip -s neigh flush all");
-                return true;
-            }
-
-            Log.d(TAG, "Flushing ARP via individual deletion");
-            Map<String, String> snapshot;
-            synchronized (lock) { snapshot = new HashMap<>(arpCache); }
-            for (String ip : snapshot.keySet()) {
-                shellManager.executeCommandBool(
-                        "ip neigh del " + shQ(ip));
-            }
-            Thread.sleep(200);
-            Log.d(TAG, "✅ Flushed ARP via individual deletion");
+            // Single command to flush - no waiting
+            shellManager.executeCommandBool("ip neigh flush all 2>/dev/null");
             return true;
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to flush ARP cache", e);
+            Log.e(TAG, "Failed to flush ARP cache", e);
             return false;
         }
     }
@@ -536,9 +402,8 @@ public class ArpRestore {
 
     public boolean waitForRestoreComplete(long timeoutMs) {
         long start = System.currentTimeMillis();
-        while (isRestoring.get()
-                && (System.currentTimeMillis() - start) < timeoutMs) {
-            try { Thread.sleep(50); }
+        while (isRestoring.get() && (System.currentTimeMillis() - start) < timeoutMs) {
+            try { Thread.sleep(20); }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;

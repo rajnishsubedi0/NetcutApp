@@ -1,6 +1,5 @@
 package com.app.netcut;
 
-
 import android.content.Context;
 import android.os.SystemClock;
 import android.util.Log;
@@ -10,25 +9,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Manages the lifecycle of the external netcut binary.
- *
- * Changes vs. previous version:
- *  - Uses ShellUtils.shQ() everywhere (removed local shQ/sq duplicates).
- *  - emergencyStop() / broadKill() delegate to NetcutKiller — single source
- *    of truth for "kill netcut".
- *  - startLogTail() now uses BufferedReader with UTF-8 instead of the
- *    fragile ISO-8859-1 → UTF-8 byte hack.
- *  - ioExecutor is now a fixed-size pool (was CachedThreadPool which could
- *    spawn unbounded threads).
- */
 public class NetcutRunner {
 
-    private static final String TAG = "NetcutRunnerV3";
+    private static final String TAG = "NetcutRunner";
 
-    public interface LogListener   { void onLog(String line); }
+    public interface LogListener { void onLog(String line); }
     public interface StateListener {
         void onStarted(int pid, LaunchMode mode);
         void onStopped();
@@ -41,10 +29,10 @@ public class NetcutRunner {
     private final LogListener logListener;
     private final StateListener stateListener;
 
-    private final ExecutorService ioExecutor = Executors.newFixedThreadPool(3);
+    private final ExecutorService ioExecutor = Executors.newFixedThreadPool(2);
 
     private PersistentRootShell shell;
-    private final AtomicBoolean running  = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
 
     private volatile Future<?> tailFuture;
@@ -60,8 +48,8 @@ public class NetcutRunner {
     public NetcutRunner(Context context,
                         LogListener logListener,
                         StateListener stateListener) {
-        this.context       = context.getApplicationContext();
-        this.logListener   = logListener;
+        this.context = context.getApplicationContext();
+        this.logListener = logListener;
         this.stateListener = stateListener;
     }
 
@@ -99,7 +87,6 @@ public class NetcutRunner {
         init();
         stopping.set(false);
 
-        // cleanup stale files
         shell.exec(": > " + ShellUtils.shQ(logFile.getAbsolutePath()));
         shell.exec("rm -f " + ShellUtils.shQ(pidFile.getAbsolutePath()));
 
@@ -114,13 +101,12 @@ public class NetcutRunner {
 
         PersistentRootShell.ShellResult result = shell.exec(cmd);
         if (result.exitCode != 0) {
-            throw new IOException("Launch command failed rc=" + result.exitCode
-                    + " out=" + result.joinedStdout());
+            throw new IOException("Launch command failed rc=" + result.exitCode);
         }
 
-        int pid = waitForPidFile(4000);
+        int pid = waitForPidFile(3000);
         if (pid <= 0) {
-            throw new IOException("Failed to obtain netcut pid from pid file");
+            throw new IOException("Failed to obtain netcut pid");
         }
 
         netcutPid = pid;
@@ -133,21 +119,25 @@ public class NetcutRunner {
         log("Started with pid=" + pid);
     }
 
+    /**
+     * FAST emergency stop - kills immediately with minimal waiting
+     */
     public synchronized void emergencyStop() {
-        Log.d(TAG, "Emergency stop called");
+        Log.d(TAG, "Emergency stop - FAST");
         try {
-            // Delegate to the centralized killer.
-            RootShellManager rsm = RootShellManager.getInstance();
-            NetcutKiller.killAllAndFlushArp(rsm);
-
-            // Also try via our persistent shell (in case libsu shell is down
-            // but our private su session is still alive).
+            // Kill immediately - no waiting
             if (shell != null && shell.isAlive()) {
                 shell.exec("pkill -9 -f netcut 2>/dev/null || true");
                 shell.exec("ip neigh flush all 2>/dev/null || true");
             }
 
-            restoreArpQuietly();
+            // Also use libsu
+            RootShellManager rsm = RootShellManager.getInstance();
+            rsm.executeCommandBool("pkill -9 -f netcut 2>/dev/null || true");
+            rsm.executeCommandBool("ip neigh flush all 2>/dev/null || true");
+
+            // Fast ARP restore
+            restoreArpQuietlyFast();
 
             running.set(false);
             stopping.set(false);
@@ -162,38 +152,88 @@ public class NetcutRunner {
         }
     }
 
+    /**
+     * FAST stop - minimal waiting
+     */
     public synchronized void stop() {
         if (!running.get() && netcutPid <= 0) {
-            restoreArpQuietly();
+            restoreArpQuietlyFast();
             if (stateListener != null) stateListener.onStopped();
             return;
         }
         stopping.set(true);
         try {
-            stopInternal(false);
+            // Try once with SIGTERM, then immediately with SIGKILL
+            stopInternalFast();
         } catch (Exception e) {
             log("stop failed: " + e.getMessage());
-            try {
-                stopInternal(true);
-            } catch (Exception e2) {
-                log("force stop failed: " + e2.getMessage());
-            }
+            // Force kill
+            forceKill();
         } finally {
             cleanupAfterStop();
-            restoreArpQuietly();
+            restoreArpQuietlyFast();
             if (stateListener != null) stateListener.onStopped();
+        }
+    }
+
+    private void stopInternalFast() throws Exception {
+        if (shell == null || !shell.isAlive()) return;
+
+        int pid = readPidFromFileOrMemory();
+        if (pid <= 0) {
+            forceKill();
+            return;
+        }
+
+        // Send SIGTERM first (no waiting)
+        shell.exec("kill -15 " + pid + " 2>/dev/null || true");
+        shell.exec("pkill -15 -P " + pid + " 2>/dev/null || true");
+
+        // Wait only 300ms for graceful shutdown
+        SystemClock.sleep(300);
+
+        // Still alive? SIGKILL immediately
+        if (isPidAlive(pid)) {
+            shell.exec("kill -9 " + pid + " 2>/dev/null || true");
+            shell.exec("pkill -9 -P " + pid + " 2>/dev/null || true");
+            if (launchMode == LaunchMode.SETSID) {
+                shell.exec("kill -9 -- -" + pid + " 2>/dev/null || true");
+            }
+        }
+
+        // One more check - if still alive, broad kill
+        if (isPidAlive(pid)) {
+            forceKill();
+        }
+    }
+
+    private void forceKill() {
+        try {
+            if (shell != null && shell.isAlive()) {
+                shell.exec("pkill -9 -f netcut 2>/dev/null || true");
+                shell.exec("killall -9 netcut 2>/dev/null || true");
+            }
+            RootShellManager rsm = RootShellManager.getInstance();
+            rsm.executeCommandBool("pkill -9 -f netcut 2>/dev/null || true");
+        } catch (Exception ignored) {}
+    }
+
+    private void restoreArpQuietlyFast() {
+        try {
+            ArpRestore arpRestore = ArpRestore.getInstance(context);
+            arpRestore.flushAndRestoreFast();
+        } catch (Exception e) {
+            log("restoreArp failed: " + e.getMessage());
         }
     }
 
     public synchronized void forceStop() {
         stopping.set(true);
         try {
-            stopInternal(true);
-        } catch (Exception e) {
-            log("forceStop exception: " + e.getMessage());
+            forceKill();
         } finally {
             cleanupAfterStop();
-            restoreArpQuietly();
+            restoreArpQuietlyFast();
             if (stateListener != null) stateListener.onStopped();
         }
     }
@@ -207,79 +247,12 @@ public class NetcutRunner {
         ioExecutor.shutdownNow();
     }
 
-    public boolean isRunning()      { return running.get(); }
-    public int getPid()             { return netcutPid; }
+    public boolean isRunning() { return running.get(); }
+    public int getPid() { return netcutPid; }
     public LaunchMode getLaunchMode() { return launchMode; }
 
     // ------------------------------------------------------------------
-    // Internal stop logic
-    // ------------------------------------------------------------------
-
-    private void stopInternal(boolean force) throws Exception {
-        if (shell == null || !shell.isAlive()) return;
-
-        int pid = readPidFromFileOrMemory();
-        if (pid <= 0) {
-            log("No valid pid found; using broad fallback");
-            broadKill(force);
-            return;
-        }
-
-        int sig = force ? 9 : 15;
-        switch (launchMode) {
-            case SETSID:
-                shell.exec("kill -" + sig + " -- -" + pid + " 2>/dev/null || true");
-                shell.exec("kill -" + sig + " " + pid + " 2>/dev/null || true");
-                break;
-            case NOHUP:
-            case PLAIN_BG:
-            default:
-                shell.exec("kill -" + sig + " " + pid + " 2>/dev/null || true");
-                shell.exec("pkill -" + sig + " -P " + pid + " 2>/dev/null || true");
-                break;
-        }
-
-        waitForExit(pid, force ? 2000 : 3500);
-
-        if (isPidAlive(pid)) {
-            log("pid still alive after primary stop, escalating");
-            shell.exec("kill -9 " + pid + " 2>/dev/null || true");
-            shell.exec("pkill -9 -P " + pid + " 2>/dev/null || true");
-            shell.exec("kill -9 -- -" + pid + " 2>/dev/null || true");
-            waitForExit(pid, 2000);
-        }
-
-        if (isPidAlive(pid)) {
-            broadKill(true);
-        }
-    }
-
-    private void broadKill(boolean force) throws Exception {
-        if (shell == null || !shell.isAlive()) return;
-        int sig = force ? 9 : 15;
-        String binName = new File(netcutPath).getName();
-        shell.exec("pkill -" + sig + " -f " + ShellUtils.shQ(netcutPath) + " 2>/dev/null || true");
-        shell.exec("pkill -" + sig + " "   + ShellUtils.shQ(binName)   + " 2>/dev/null || true");
-    }
-
-    private void cleanupAfterStop() {
-        running.set(false);
-        stopping.set(false);
-        netcutPid = -1;
-
-        if (tailFuture != null)       { tailFuture.cancel(true);       tailFuture = null; }
-        if (crashWatchFuture != null) { crashWatchFuture.cancel(true); crashWatchFuture = null; }
-
-        try {
-            if (shell != null && shell.isAlive()) {
-                shell.exec("rm -f " + ShellUtils.shQ(pidFile.getAbsolutePath())
-                        + " 2>/dev/null || true");
-            }
-        } catch (Exception ignored) {}
-    }
-
-    // ------------------------------------------------------------------
-    // Log tailing (UTF-8 safe)
+    // Log tailing (optimized)
     // ------------------------------------------------------------------
 
     private void startLogTail() {
@@ -293,17 +266,14 @@ public class NetcutRunner {
                         continue;
                     }
                     long len = logFile.length();
-                    if (len < pos) pos = 0; // truncated
+                    if (len < pos) pos = 0;
 
                     if (len > pos) {
                         try (RandomAccessFile raf = new RandomAccessFile(logFile, "r")) {
                             raf.seek(pos);
-                            // Read raw bytes and decode as UTF-8
                             byte[] buf = new byte[(int) (len - pos)];
                             raf.readFully(buf);
                             String chunk = new String(buf, StandardCharsets.UTF_8);
-
-                            // Split into lines and deliver
                             for (String line : chunk.split("\n")) {
                                 if (!line.isEmpty() && logListener != null) {
                                     logListener.onLog(line);
@@ -314,7 +284,6 @@ public class NetcutRunner {
                     }
                     SystemClock.sleep(250);
                 } catch (Exception e) {
-                    log("tail error: " + e.getMessage());
                     SystemClock.sleep(500);
                 }
             }
@@ -330,7 +299,7 @@ public class NetcutRunner {
                     if (pid > 0 && !isPidAlive(pid)) {
                         log("Crash watcher: netcut died pid=" + pid);
                         running.set(false);
-                        restoreArpQuietly();
+                        restoreArpQuietlyFast();
                         if (stateListener != null) {
                             stateListener.onCrashed("netcut exited unexpectedly");
                         }
@@ -341,7 +310,6 @@ public class NetcutRunner {
                     Thread.currentThread().interrupt();
                     return;
                 } catch (Exception e) {
-                    log("crash watcher error: " + e.getMessage());
                     SystemClock.sleep(1000);
                 }
             }
@@ -354,7 +322,7 @@ public class NetcutRunner {
 
     private LaunchMode detectLaunchMode() throws Exception {
         if (commandExists("setsid")) return LaunchMode.SETSID;
-        if (commandExists("nohup"))  return LaunchMode.NOHUP;
+        if (commandExists("nohup")) return LaunchMode.NOHUP;
         return LaunchMode.PLAIN_BG;
     }
 
@@ -370,8 +338,6 @@ public class NetcutRunner {
         String full = ShellUtils.shQ(binary)
                 + (args == null || args.trim().isEmpty() ? "" : " " + args.trim());
 
-        // We need a version of `full` that is safe to embed inside a
-        // single-quoted sh -c '…' wrapper.
         String fullInsideSingleQuotes = full.replace("'", "'\\''");
         String logQ = ShellUtils.shQ(logPath);
         String pidQ = ShellUtils.shQ(pidPath);
@@ -404,7 +370,7 @@ public class NetcutRunner {
         while (SystemClock.uptimeMillis() < end) {
             int pid = readPidFromFile();
             if (pid > 0) return pid;
-            SystemClock.sleep(150);
+            SystemClock.sleep(100);
         }
         return -1;
     }
@@ -438,14 +404,6 @@ public class NetcutRunner {
         return r.exitCode == 0;
     }
 
-    private void waitForExit(int pid, long timeoutMs) throws Exception {
-        long end = SystemClock.uptimeMillis() + timeoutMs;
-        while (SystemClock.uptimeMillis() < end) {
-            if (!isPidAlive(pid)) return;
-            SystemClock.sleep(150);
-        }
-    }
-
     private String findNetcutBinary() throws Exception {
         String[] candidates = {
                 new File(context.getFilesDir(), "netcut").getAbsolutePath(),
@@ -462,18 +420,24 @@ public class NetcutRunner {
         return null;
     }
 
-    private void restoreArpQuietly() {
-        try {
-            ArpRestore arpRestore = ArpRestore.getInstance(context);
-            boolean ok = arpRestore.restoreAllArpEntries();
-            log("ARP restore result: " + ok);
-        } catch (Exception e) {
-            log("restoreArp failed: " + e.getMessage());
-        }
-    }
-
     private void log(String s) {
         Log.d(TAG, s);
         if (logListener != null) logListener.onLog("[runner] " + s);
+    }
+
+    private void cleanupAfterStop() {
+        running.set(false);
+        stopping.set(false);
+        netcutPid = -1;
+
+        if (tailFuture != null) { tailFuture.cancel(true); tailFuture = null; }
+        if (crashWatchFuture != null) { crashWatchFuture.cancel(true); crashWatchFuture = null; }
+
+        try {
+            if (shell != null && shell.isAlive()) {
+                shell.exec("rm -f " + ShellUtils.shQ(pidFile.getAbsolutePath())
+                        + " 2>/dev/null || true");
+            }
+        } catch (Exception ignored) {}
     }
 }

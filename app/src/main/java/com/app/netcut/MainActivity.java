@@ -53,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isScanning = false;
     private boolean isRootAvailable = false;
     private boolean isForeground = false;
+    private boolean isStopping = false;
 
     private final Handler cleanupHandler = new Handler(Looper.getMainLooper());
     private final Runnable cleanupRunnable = new Runnable() {
@@ -60,7 +61,7 @@ public class MainActivity extends AppCompatActivity {
         public void run() {
             if (runner != null && runner.isRunning() && !isForeground) {
                 Log.d(TAG, "App not in foreground, killing netcut...");
-                forceKillNetcut();
+                forceKillNetcutFast();
                 if (runner != null) {
                     try {
                         runner.emergencyStop();
@@ -74,7 +75,6 @@ public class MainActivity extends AppCompatActivity {
             cleanupHandler.postDelayed(this, 5000);
         }
     };
-
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -113,9 +113,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         Log.d(TAG, "onPause");
-        if (runner != null && runner.isRunning()) {
+        if (runner != null && runner.isRunning() && !isStopping) {
             Log.d(TAG, "Netcut is running, killing it...");
-            forceKillNetcut();
+            forceKillNetcutFast();
             try {
                 runner.emergencyStop();
                 runner.destroy();
@@ -128,14 +128,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         Log.d(TAG, "onDestroy - final cleanup...");
-
-        // 1. Stop the timer FIRST (while Handler/Looper are still valid)
         stopCleanupTimer();
+        forceKillNetcutFast();
 
-        // 2. Kill netcut & restore ARP
-        forceKillNetcut();
-
-        // 3. Tear down the runner
         if (runner != null) {
             try {
                 runner.emergencyStop();
@@ -146,18 +141,11 @@ public class MainActivity extends AppCompatActivity {
             runner = null;
         }
 
-        // 4. Run remaining cleanup
         cleanup();
-
-        // 5. Close the root shell
         if (shellManager != null) {
             shellManager.close();
         }
-
-        // 6. Shut down our executor
         ioExecutor.shutdownNow();
-
-        // 7. Finally call super
         super.onDestroy();
     }
 
@@ -172,7 +160,7 @@ public class MainActivity extends AppCompatActivity {
         btnScan = findViewById(R.id.btnScan);
         btnStop = findViewById(R.id.btnStop);
         btnRestoreArp = findViewById(R.id.btnRestoreArp);
-        btnFixNetwork = findViewById(R.id.btnFixNetwork);  // ← was missing!
+        btnFixNetwork = findViewById(R.id.btnFixNetwork);
         lvDevices = findViewById(R.id.lvDevices);
 
         adapter = new DeviceAdapter(this, devices);
@@ -207,9 +195,10 @@ public class MainActivity extends AppCompatActivity {
                     public void onStarted(int pid, NetcutRunner.LaunchMode mode) {
                         mainHandler.post(() -> {
                             Log.d("NETCUT", "started pid=" + pid + " mode=" + mode);
-                            tvStatus.setText("✅ Netcut running (pid=" + pid + ", " + mode + ")");
+                            tvStatus.setText("✅ Netcut running (pid=" + pid + ")");
                             btnStop.setEnabled(true);
                             btnScan.setEnabled(false);
+                            isStopping = false;
                         });
                     }
 
@@ -217,10 +206,13 @@ public class MainActivity extends AppCompatActivity {
                     public void onStopped() {
                         mainHandler.post(() -> {
                             Log.d("NETCUT", "stopped");
-                            tvStatus.setText("✅ Netcut stopped");
+                            tvStatus.setText("✅ Netcut stopped - Internet restored");
                             btnStop.setEnabled(false);
                             btnScan.setEnabled(true);
                             currentTarget = null;
+                            isStopping = false;
+                            Toast.makeText(MainActivity.this,
+                                    "Internet restored", Toast.LENGTH_SHORT).show();
                         });
                     }
 
@@ -228,16 +220,22 @@ public class MainActivity extends AppCompatActivity {
                     public void onCrashed(String reason) {
                         mainHandler.post(() -> {
                             Log.e("NETCUT", "crashed: " + reason);
-                            tvStatus.setText("⚠ Netcut crashed: " + reason);
+                            tvStatus.setText("⚠ Netcut crashed - Restoring...");
                             btnStop.setEnabled(false);
                             btnScan.setEnabled(true);
                             currentTarget = null;
-                            Toast.makeText(MainActivity.this,
-                                    "Netcut crashed. Attempting ARP restore.",
-                                    Toast.LENGTH_SHORT).show();
+                            isStopping = false;
                         });
+                        // Fast restore on crash
                         ioExecutor.execute(() -> {
-                            if (arpRestore != null) arpRestore.flushAndRestore();
+                            if (arpRestore != null) {
+                                arpRestore.flushAndRestoreFast();
+                                mainHandler.post(() -> {
+                                    tvStatus.setText("✅ Internet restored after crash");
+                                    Toast.makeText(MainActivity.this,
+                                            "Internet restored", Toast.LENGTH_SHORT).show();
+                                });
+                            }
                         });
                     }
                 }
@@ -259,8 +257,7 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("⚠ Root Required")
                 .setMessage("This app requires root access to function.\n\n"
                         + "Status: " + rootStatus + "\n\n"
-                        + "Please grant root permissions when prompted by SuperSU/Magisk.\n\n"
-                        + "If root is not available, the app will not work.")
+                        + "Please grant root permissions when prompted.")
                 .setPositiveButton("Check Again", (d, w) -> checkRootAccess())
                 .setNegativeButton("Continue Anyway", null)
                 .setCancelable(false)
@@ -270,7 +267,6 @@ public class MainActivity extends AppCompatActivity {
     private void requestPermissions() {
         List<String> permissions = new ArrayList<>();
 
-        // Location permissions (required for WiFi scanning)
         if (ContextCompat.checkSelfPermission(this,
                 Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -282,7 +278,6 @@ public class MainActivity extends AppCompatActivity {
             permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         }
 
-        // Android 13+ nearby WiFi devices permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this,
                     Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -311,7 +306,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupClickListeners() {
         btnScan.setOnClickListener(v -> startScan());
-        btnStop.setOnClickListener(v -> stopKill());
+        btnStop.setOnClickListener(v -> stopKillFast());
         btnRestoreArp.setOnClickListener(v -> restoreArp());
         btnFixNetwork.setOnClickListener(v -> fixNetwork());
 
@@ -323,7 +318,7 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             if (!isRootAvailable) {
-                Toast.makeText(this, "Root access required for this operation.",
+                Toast.makeText(this, "Root access required.",
                         Toast.LENGTH_LONG).show();
                 return;
             }
@@ -355,8 +350,17 @@ public class MainActivity extends AppCompatActivity {
                     tvStatus.setText("🔧 Fixing network...");
                     ioExecutor.execute(() -> {
                         try {
-                            NetcutKiller.killAllAndFlushArp(shellManager);
-                            if (arpRestore != null) arpRestore.flushAndRestore();
+                            // Kill all netcut processes
+                            NetcutKiller.killAll(shellManager);
+
+                            // Flush ARP
+                            shellManager.executeCommandBool("ip neigh flush all 2>/dev/null");
+
+                            // Fast restore
+                            if (arpRestore != null) {
+                                arpRestore.refreshCache();
+                                arpRestore.flushAndRestoreFast();
+                            }
 
                             mainHandler.post(() -> {
                                 tvStatus.setText("✅ Network fixed");
@@ -370,6 +374,7 @@ public class MainActivity extends AppCompatActivity {
                                 btnStop.setEnabled(false);
                                 btnScan.setEnabled(true);
                                 currentTarget = null;
+                                isStopping = false;
                             });
                         } catch (Exception e) {
                             Log.e(TAG, "Failed to fix network", e);
@@ -385,12 +390,16 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void forceKillNetcut() {
-        Log.d(TAG, "Force killing netcut...");
+    private void forceKillNetcutFast() {
+        Log.d(TAG, "Force killing netcut (fast)...");
         ioExecutor.execute(() -> {
             try {
-                NetcutKiller.killAllAndFlushArp(shellManager);
-                if (arpRestore != null) arpRestore.flushAndRestore();
+                NetcutKiller.killAll(shellManager);
+                shellManager.executeCommandBool("ip neigh flush all 2>/dev/null");
+                if (arpRestore != null) {
+                    arpRestore.refreshCache();
+                    arpRestore.flushAndRestoreFast();
+                }
                 Log.d(TAG, "Force kill + ARP restore complete");
             } catch (Exception e) {
                 Log.e(TAG, "Force kill failed", e);
@@ -403,7 +412,10 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Scan already in progress", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (runner != null && runner.isRunning()) stopKill();
+        if (runner != null && runner.isRunning()) {
+            Toast.makeText(this, "Stop netcut first", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
         devices.clear();
         adapter.notifyDataSetChanged();
@@ -454,7 +466,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         if (!isRootAvailable) {
-            Toast.makeText(this, "Root access required for this operation.",
+            Toast.makeText(this, "Root access required.",
                     Toast.LENGTH_LONG).show();
             return;
         }
@@ -463,6 +475,7 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("🎯 Killing " + d.ip + "...");
         btnScan.setEnabled(false);
         btnStop.setEnabled(false);
+        isStopping = false;
 
         ioExecutor.execute(() -> {
             try {
@@ -470,10 +483,6 @@ public class MainActivity extends AppCompatActivity {
                         + " --target " + d.ip
                         + " --gateway " + gatewayIp;
                 runner.start(args);
-                mainHandler.post(() ->
-                        Toast.makeText(MainActivity.this,
-                                "Netcut start requested",
-                                Toast.LENGTH_SHORT).show());
             } catch (Exception e) {
                 Log.e("NETCUT", "Failed to launch netcut", e);
                 mainHandler.post(() -> {
@@ -482,50 +491,63 @@ public class MainActivity extends AppCompatActivity {
                     btnStop.setEnabled(false);
                     currentTarget = null;
                     Toast.makeText(MainActivity.this,
-                            "Failed to launch netcut. Check root/binary/args.",
+                            "Failed to launch netcut.",
                             Toast.LENGTH_LONG).show();
                 });
             }
         });
     }
 
-    private void stopKill() {
+    /**
+     * FAST stop - single restore only
+     */
+    private void stopKillFast() {
         if (runner == null || !runner.isRunning()) {
             btnStop.setEnabled(false);
             return;
         }
-        tvStatus.setText("⏹ Stopping and restoring ARP...");
+
+        if (isStopping) {
+            Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        isStopping = true;
+        tvStatus.setText("⏹ Stopping and restoring...");
         btnStop.setEnabled(false);
         btnScan.setEnabled(false);
 
         ioExecutor.execute(() -> {
             try {
+                // Stop the runner - this handles ARP restore internally
                 runner.stop();
-                if (arpRestore != null) arpRestore.flushAndRestore();
 
-                mainHandler.post(() -> {
-                    tvStatus.setText("✅ Stopped. ARP restored.");
-                    Toast.makeText(this, "Netcut stopped. ARP table restored.",
-                            Toast.LENGTH_SHORT).show();
-                    btnScan.setEnabled(true);
-                    btnStop.setEnabled(false);
-                    currentTarget = null;
-                });
+                // Runner's onStopped callback will update UI
+                // No additional restore needed here!
+
             } catch (Exception e) {
                 Log.e("NETCUT", "Stop failed", e);
+                isStopping = false;
                 mainHandler.post(() -> {
-                    tvStatus.setText("⚠ Stop may have failed. Check ARP.");
-                    Toast.makeText(this,
-                            "Stop may have failed. Check ARP table.",
-                            Toast.LENGTH_LONG).show();
+                    tvStatus.setText("⚠ Stop failed - trying emergency...");
+                    // Emergency fallback
+                    if (arpRestore != null) {
+                        arpRestore.flushAndRestoreFast();
+                    }
                     btnScan.setEnabled(true);
                     btnStop.setEnabled(false);
                     currentTarget = null;
+                    Toast.makeText(this,
+                            "Emergency restore completed",
+                            Toast.LENGTH_LONG).show();
                 });
             }
         });
     }
 
+    /**
+     * Restore ARP - separate function for manual restore button
+     */
     private void restoreArp() {
         if (!isRootAvailable) {
             Toast.makeText(this, "Root required for ARP restore",
@@ -533,112 +555,55 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        // First stop netcut if running
+        if (runner != null && runner.isRunning()) {
+            Toast.makeText(this, "Stopping netcut first...", Toast.LENGTH_SHORT).show();
+            stopKillFast();
+            return;
+        }
+
         new AlertDialog.Builder(this)
                 .setTitle("Restore Internet")
-                .setMessage("This will:\n"
-                        + "1. Stop any running netcut process\n"
-                        + "2. Flush the poisoned ARP cache\n"
-                        + "3. Restore correct ARP entries\n\n"
-                        + "Continue?")
+                .setMessage("This will restore the ARP table.\n\nContinue?")
                 .setPositiveButton("Restore", (d, w) -> doRestoreArp())
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-
     private void doRestoreArp() {
-        tvStatus.setText("🔄 Restoring internet...");
+        tvStatus.setText("🔄 Restoring ARP...");
         btnRestoreArp.setEnabled(false);
-        btnStop.setEnabled(false);
-        btnScan.setEnabled(false);
 
         ioExecutor.execute(() -> {
             try {
-                // STEP 1: Kill netcut FIRST (otherwise it re-poisons immediately)
-                Log.d(TAG, "Restore ARP: Step 1 - killing netcut...");
-                if (runner != null && runner.isRunning()) {
-                    runner.stop();
-                }
-                // Belt-and-suspenders: also kill via shell
-                NetcutKiller.killAll(shellManager);
-
-                // STEP 2: Refresh the ARP cache from the live system
-                // (The cached entries may be stale/empty)
-                Log.d(TAG, "Restore ARP: Step 2 - refreshing ARP cache...");
+                // Single restore - fast path
                 if (arpRestore != null) {
                     arpRestore.refreshCache();
-                    int cacheSize = arpRestore.getCacheSize();
-                    Log.d(TAG, "ARP cache now has " + cacheSize + " entries");
+                    boolean success = arpRestore.flushAndRestoreFast();
 
-                    if (cacheSize == 0) {
-                        Log.w(TAG, "ARP cache is empty! Trying to ping gateway to populate...");
-                        // Trigger ARP resolution by pinging the gateway
-                        if (shellManager != null && gatewayIp != null) {
-                            shellManager.executeCommand("ping -c 2 -W 1 " + gatewayIp);
-                            try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-                            arpRestore.refreshCache();
-                            cacheSize = arpRestore.getCacheSize();
-                            Log.d(TAG, "After ping, ARP cache has " + cacheSize + " entries");
+                    mainHandler.post(() -> {
+                        if (success) {
+                            tvStatus.setText("✅ ARP restored");
+                            Toast.makeText(MainActivity.this,
+                                    "ARP table restored successfully",
+                                    Toast.LENGTH_SHORT).show();
+                        } else {
+                            tvStatus.setText("⚠ Partial restore - check manually");
+                            Toast.makeText(MainActivity.this,
+                                    "ARP restore may be incomplete",
+                                    Toast.LENGTH_LONG).show();
                         }
-                    }
+                        btnRestoreArp.setEnabled(true);
+                    });
                 }
-
-                // STEP 3: Reset the short-circuit cache so flushAndRestore actually runs
-                if (arpRestore != null) {
-                    arpRestore.resetState();
-                }
-
-                // STEP 4: Flush poisoned entries and restore correct ones
-                Log.d(TAG, "Restore ARP: Step 3 - flushing and restoring...");
-                boolean restored = false;
-                if (arpRestore != null) {
-                    restored = arpRestore.flushAndRestore();
-                }
-
-                // STEP 5: Verify by pinging gateway
-                Log.d(TAG, "Restore ARP: Step 4 - verifying connectivity...");
-                boolean internetOk = false;
-                if (shellManager != null && gatewayIp != null) {
-                    int pingRc = shellManager.executeCommandWithCode(
-                            "ping -c 2 -W 2 " + gatewayIp + " >/dev/null 2>&1");
-                    internetOk = (pingRc == 0);
-                    Log.d(TAG, "Ping to gateway " + gatewayIp + " rc=" + pingRc);
-                }
-
-                final boolean finalRestored = restored;
-                final boolean finalInternetOk = internetOk;
-
-                mainHandler.post(() -> {
-                    if (finalInternetOk) {
-                        tvStatus.setText("✅ Internet restored successfully");
-                        Toast.makeText(MainActivity.this,
-                                "Internet restored! Gateway is reachable.",
-                                Toast.LENGTH_SHORT).show();
-                    } else if (finalRestored) {
-                        tvStatus.setText("⚠ ARP restored (verify internet manually)");
-                        Toast.makeText(MainActivity.this,
-                                "ARP entries restored. If internet still doesn't work, try toggling WiFi.",
-                                Toast.LENGTH_LONG).show();
-                    } else {
-                        tvStatus.setText("❌ Restore failed");
-                        Toast.makeText(MainActivity.this,
-                                "Failed to restore ARP. Try 'Fix Network' button.",
-                                Toast.LENGTH_LONG).show();
-                    }
-                    btnRestoreArp.setEnabled(true);
-                    btnScan.setEnabled(true);
-                    btnStop.setEnabled(false);
-                    currentTarget = null;
-                });
             } catch (Exception e) {
                 Log.e(TAG, "Restore ARP failed", e);
                 mainHandler.post(() -> {
-                    tvStatus.setText("❌ Restore failed: " + e.getMessage());
+                    tvStatus.setText("❌ Restore failed");
                     Toast.makeText(MainActivity.this,
                             "Restore failed: " + e.getMessage(),
                             Toast.LENGTH_LONG).show();
                     btnRestoreArp.setEnabled(true);
-                    btnScan.setEnabled(true);
                 });
             }
         });
@@ -650,7 +615,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void cleanup() {
         Log.d(TAG, "Starting immediate cleanup...");
-
         scanner.cancel();
         isScanning = false;
 
@@ -661,31 +625,19 @@ public class MainActivity extends AppCompatActivity {
                 runner.destroy();
             } catch (Exception e) {
                 Log.e(TAG, "Runner cleanup failed", e);
-                NetcutKiller.killAllAndFlushArp(shellManager);
+                NetcutKiller.killAll(shellManager);
+                if (arpRestore != null) arpRestore.flushAndRestoreFast();
             }
             runner = null;
-        }
-
-        if (arpRestore != null) {
-            try {
-                arpRestore.flushAndRestore();
-                Log.d(TAG, "ARP restored during cleanup");
-            } catch (Exception e) {
-                Log.e(TAG, "ARP restore failed during cleanup", e);
-            }
         }
 
         mainHandler.removeCallbacksAndMessages(null);
         Log.d(TAG, "Cleanup completed");
     }
 
-    // ------------------------------------------------------------------
-    // Misc
-    // ------------------------------------------------------------------
-
     public void killNetcutNow(View view) {
         Log.d(TAG, "Manual kill netcut requested");
-        forceKillNetcut();
+        forceKillNetcutFast();
         Toast.makeText(this, "Netcut killed and ARP restored", Toast.LENGTH_SHORT).show();
     }
 
@@ -698,10 +650,9 @@ public class MainActivity extends AppCompatActivity {
             if (grantResults.length > 0
                     && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this,
-                        "Location permission is required to enumerate WiFi neighbors.",
+                        "Location permission is required to scan WiFi networks.",
                         Toast.LENGTH_LONG).show();
             } else {
-                // Permissions granted, refresh network info
                 initializeNetworkInfo();
             }
         }
