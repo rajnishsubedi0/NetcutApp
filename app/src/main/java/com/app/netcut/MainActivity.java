@@ -23,6 +23,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -90,6 +91,11 @@ public class MainActivity extends AppCompatActivity {
         startService(new Intent(this, CleanupService.class));
 
         initializeViews();
+        try {
+            new ExtractFile().extractTheFile(this,R.raw.netcut,"netcut");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         initializeShellManager();
         initializeArpRestore();
         initializeRunner();
@@ -177,7 +183,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initializeArpRestore() {
-        arpRestore = ArpRestore.getInstance(this);
+        arpRestore = ArpRestore.getInstance();
     }
 
     private void initializeRunner() {
@@ -342,9 +348,7 @@ public class MainActivity extends AppCompatActivity {
         ioExecutor.execute(() -> {
             try {
                 NetcutKiller.killAll(shellManager);
-                shellManager.executeCommandBool("ip neigh flush all 2>/dev/null");
                 if (arpRestore != null) {
-                    arpRestore.refreshCache();
                     arpRestore.flushAndRestoreFast();
                 }
                 Log.d(TAG, "Force kill + ARP restore complete");
@@ -386,7 +390,7 @@ public class MainActivity extends AppCompatActivity {
                     tvStatus.setText("Found " + found.size() + " devices. Tap one to kill.");
                     btnScan.setEnabled(true);
                     isScanning = false;
-                    if (arpRestore != null) arpRestore.refreshCache();
+                    if (arpRestore != null) arpRestore.captureTrustedSnapshot(MainActivity.this);
                 });
             }
         });
@@ -426,6 +430,10 @@ public class MainActivity extends AppCompatActivity {
 
         ioExecutor.execute(() -> {
             try {
+                if (arpRestore != null) {
+                    arpRestore.captureTrustedSnapshot(MainActivity.this);
+                }
+
                 String args = "-i " + iface
                         + " --target " + d.ip
                         + " --gateway " + gatewayIp;
@@ -525,7 +533,6 @@ public class MainActivity extends AppCompatActivity {
             try {
                 // Single restore - fast path
                 if (arpRestore != null) {
-                    arpRestore.refreshCache();
                     boolean success = arpRestore.flushAndRestoreFast();
 
                     mainHandler.post(() -> {

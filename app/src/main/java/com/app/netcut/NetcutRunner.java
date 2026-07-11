@@ -218,7 +218,7 @@ public class NetcutRunner {
 
     private void restoreArpQuietlyFast() {
         try {
-            ArpRestore arpRestore = ArpRestore.getInstance(context);
+            ArpRestore arpRestore = ArpRestore.getInstance();
             arpRestore.flushAndRestoreFast();
         } catch (Exception e) {
             log("restoreArp failed: " + e.getMessage());
@@ -394,12 +394,16 @@ public class NetcutRunner {
     }
 
     private String findNetcutBinary() throws Exception {
+
+        String binaryPath="/data/data/"+context.getFilesDir().getAbsolutePath().substring(
+                context.getFilesDir().getAbsolutePath().indexOf("com."));
         String[] candidates = {
                 new File(context.getFilesDir(), "netcut").getAbsolutePath(),
                 new File(context.getFilesDir(), "bin/netcut").getAbsolutePath(),
                 "/data/local/tmp/netcut",
                 "/system/bin/netcut",
-                "/system/xbin/netcut"
+                "/system/xbin/netcut"+
+                  binaryPath
         };
         for (String path : candidates) {
             PersistentRootShell.ShellResult r =
