@@ -48,7 +48,9 @@ public class ArpRestore {
         }
         return instance;
     }
-
+    public String getInterfaceName(){
+        return interfaceName;
+    }
     private void detectInterface() {
         try {
             String iface = System.getProperty("wifi.interface");

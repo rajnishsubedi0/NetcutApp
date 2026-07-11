@@ -49,7 +49,7 @@ public class MainActivity extends AppCompatActivity {
     private NetcutRunner runner;
 
     private String gatewayIp;
-    private String iface = "wlan0";
+    private String iface=ArpRestore.getInstance().getInterfaceName();
 
 
     private boolean isScanning = false;
