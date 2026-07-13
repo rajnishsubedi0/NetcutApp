@@ -377,71 +377,96 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
+                // IMMEDIATELY restore ARP for this specific device in parallel
+                Thread arpThread = new Thread(() -> {
+                    try {
+                        // Restore ARP immediately using the snapshot for this session
+                        boolean restored = arpRestore.flushAndRestoreFast(sessionKey);
+                        Log.d(TAG, "ARP restore for " + sessionKey + ": " + (restored ? "success" : "failed"));
+
+                        // If restore failed, try one more time with a fresh snapshot
+                        if (!restored) {
+                            Log.w(TAG, "ARP restore failed, retrying for " + sessionKey);
+                            arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
+                            arpRestore.flushAndRestoreFast(sessionKey);
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "ARP restore error for " + sessionKey, e);
+                    }
+                });
+                arpThread.start();
+
+                // Stop the runner
                 if (session.runner != null && session.running) {
                     session.runner.stop();
                 }
 
-                // Wait for the runner's onStopped callback to update UI
-                // Add a timeout fallback
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException ignored) {}
+                // Wait briefly for the runner to stop (max 1 second)
+                int waitCount = 0;
+                while (session.running && waitCount < 10) {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException ignored) {}
+                    waitCount++;
+                }
 
-                // Clean up if still running
+                // If still running, emergency stop
                 if (session.running) {
-                    // Emergency stop
+                    Log.w(TAG, "Runner still running, emergency stop for " + sessionKey);
                     if (session.runner != null) {
                         session.runner.emergencyStop();
                         session.runner.destroy();
                     }
-
-                    mainHandler.post(() -> {
-                        session.running = false;
-                        session.stopping = false;
-                        session.pid = -1;
-                        d.isCut = false;
-                        sessionsByDeviceId.remove(sessionKey);
-                        adapter.notifyDataSetChanged();
-                        tvStatus.setText("Emergency stopped " + d.ip);
-                        btnStop.setEnabled(false);
-                        btnScan.setEnabled(true);
-                        isStopping = false;
-                    });
-
-                    // Restore ARP
+                    // Ensure ARP is restored
                     arpRestore.flushAndRestoreFast(sessionKey);
                 }
 
-            } catch (Exception e) {
-                Log.e(TAG, "Stop session failed for " + d.ip, e);
+                // Wait for ARP thread to complete (max 1 second)
+                try {
+                    arpThread.join(1000);
+                } catch (InterruptedException ignored) {}
+
+                // Update UI and cleanup
                 mainHandler.post(() -> {
-                    isStopping = false;
+                    session.running = false;
                     session.stopping = false;
-                    tvStatus.setText("Stop failed for " + d.ip);
+                    session.pid = -1;
+                    d.isCut = false;
+                    sessionsByDeviceId.remove(sessionKey);
+                    adapter.notifyDataSetChanged();
+                    tvStatus.setText("Internet restored for " + d.ip);
+                    btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
-                    btnStop.setEnabled(session.running);
+                    isStopping = false;
                     Toast.makeText(MainActivity.this,
-                            "Failed to stop: " + e.getMessage(),
-                            Toast.LENGTH_LONG).show();
+                            "Internet restored for " + d.ip,
+                            Toast.LENGTH_SHORT).show();
                 });
 
+            } catch (Exception e) {
+                Log.e(TAG, "Stop session failed for " + d.ip, e);
+
                 // Emergency cleanup
-                new Thread(() -> {
+                try {
                     if (session.runner != null) {
                         session.runner.emergencyStop();
                         session.runner.destroy();
                     }
                     arpRestore.flushAndRestoreFast(sessionKey);
-                    mainHandler.post(() -> {
-                        sessionsByDeviceId.remove(sessionKey);
-                        d.isCut = false;
-                        adapter.notifyDataSetChanged();
-                        tvStatus.setText("Cleaned up " + d.ip);
-                        btnStop.setEnabled(false);
-                        btnScan.setEnabled(true);
-                        isStopping = false;
-                    });
-                }).start();
+                } catch (Exception ignored) {}
+
+                mainHandler.post(() -> {
+                    sessionsByDeviceId.remove(sessionKey);
+                    d.isCut = false;
+                    adapter.notifyDataSetChanged();
+                    tvStatus.setText("Emergency stopped " + d.ip);
+                    btnStop.setEnabled(false);
+                    btnScan.setEnabled(true);
+                    isStopping = false;
+                    Toast.makeText(MainActivity.this,
+                            "Internet restored for " + d.ip,
+                            Toast.LENGTH_SHORT).show();
+                });
             }
         }).start();
     }

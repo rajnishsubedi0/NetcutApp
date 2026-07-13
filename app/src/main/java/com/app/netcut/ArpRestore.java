@@ -166,7 +166,11 @@ public class ArpRestore {
             Snapshot s;
             synchronized (lock) {
                 s = snapshots.get(sessionKey);
-                if (s == null) return false;
+                if (s == null) {
+                    // If no snapshot, try a generic restore for the gateway
+                    Log.w(TAG, "No snapshot for " + sessionKey + ", trying generic restore");
+                    return genericRestore();
+                }
                 s = copySnapshot(s);
             }
 
@@ -183,13 +187,28 @@ public class ArpRestore {
                 return false;
             }
 
+            // Only delete and restore the specific target IP and gateway
+            // This ensures other sessions are not affected
             if (s.targetIp != null && !s.targetIp.isEmpty()) {
                 shellManager.executeCommandBool("ip neigh del " + shQ(s.targetIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
+
+                if (s.targetMac != null && !s.targetMac.isEmpty()) {
+                    String dev = s.arpDevices.get(s.targetIp);
+                    if (dev == null || dev.isEmpty()) dev = interfaceName;
+
+                    shellManager.executeCommandBool(
+                            "ip neigh replace " + shQ(s.targetIp) +
+                                    " lladdr " + shQ(s.targetMac) +
+                                    " dev " + shQ(dev) +
+                                    " nud reachable 2>/dev/null"
+                    );
+                }
             }
 
-            shellManager.executeCommandBool("ip neigh del " + shQ(gatewayIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
-
+            // Always restore gateway if we have a valid MAC
             if (gatewayMac != null && !gatewayMac.isEmpty()) {
+                shellManager.executeCommandBool("ip neigh del " + shQ(gatewayIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
+
                 String gwDev = s.arpDevices.get(gatewayIp);
                 if (gwDev == null || gwDev.isEmpty()) gwDev = interfaceName;
 
@@ -197,18 +216,6 @@ public class ArpRestore {
                         "ip neigh replace " + shQ(gatewayIp) +
                                 " lladdr " + shQ(gatewayMac) +
                                 " dev " + shQ(gwDev) +
-                                " nud reachable 2>/dev/null"
-                );
-            }
-
-            if (s.targetIp != null && s.targetMac != null && !s.targetMac.isEmpty()) {
-                String dev = s.arpDevices.get(s.targetIp);
-                if (dev == null || dev.isEmpty()) dev = interfaceName;
-
-                shellManager.executeCommandBool(
-                        "ip neigh replace " + shQ(s.targetIp) +
-                                " lladdr " + shQ(s.targetMac) +
-                                " dev " + shQ(dev) +
                                 " nud reachable 2>/dev/null"
                 );
             }
@@ -228,6 +235,43 @@ public class ArpRestore {
             if (locked) {
                 try { restoreLock.unlock(); } catch (Exception ignored) {}
             }
+        }
+    }
+
+    private boolean genericRestore() {
+        try {
+            String gatewayIp = NetUtils.getGatewayIp(context);
+            if (gatewayIp == null || gatewayIp.isEmpty()) return false;
+
+            // Try to get gateway MAC from current ARP cache
+            List<String> lines = shellManager.executeCommandLines("ip neigh show " + shQ(gatewayIp));
+            if (lines != null && !lines.isEmpty()) {
+                for (String line : lines) {
+                    if (line.contains("lladdr")) {
+                        String[] parts = line.trim().split("\\s+");
+                        for (int i = 0; i < parts.length - 1; i++) {
+                            if ("lladdr".equals(parts[i])) {
+                                String mac = parts[i + 1];
+                                if (mac != null && !mac.isEmpty() && !"00:00:00:00:00:00".equalsIgnoreCase(mac)) {
+                                    // Restore gateway
+                                    shellManager.executeCommandBool("ip neigh del " + shQ(gatewayIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
+                                    shellManager.executeCommandBool(
+                                            "ip neigh replace " + shQ(gatewayIp) +
+                                                    " lladdr " + shQ(mac) +
+                                                    " dev " + shQ(interfaceName) +
+                                                    " nud reachable 2>/dev/null"
+                                    );
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            Log.e(TAG, "genericRestore failed", e);
+            return false;
         }
     }
 
