@@ -2,31 +2,60 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
     android:orientation="vertical"
-    android:padding="12dp"
-    android:background="?android:attr/selectableItemBackground">
+    android:padding="14dp">
 
-    <TextView
-        android:id="@+id/tvIp"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        android:text="192.168.1.1" />
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tvIp"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="192.168.1.1"
+            android:textColor="#C9D1D9"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStatusBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="#21262D"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="2dp"
+            android:text="Online"
+            android:textColor="#4CAF50"
+            android:textSize="11sp" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvMac"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textSize="14sp"
-        android:text="AA:BB:CC:DD:EE:FF" />
+        android:text="AA:BB:CC:DD:EE:FF"
+        android:textColor="#8B949E"
+        android:textSize="13sp" />
 
     <TextView
         android:id="@+id/tvVendor"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textSize="14sp"
-        android:textColor="#666666"
-        android:text="Unknown" />
+        android:text="Unknown"
+        android:textColor="#8B949E"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/tvCustomName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#58A6FF"
+        android:textSize="12sp"
+        android:visibility="gone" />
 
 </LinearLayout>

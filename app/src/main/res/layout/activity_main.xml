@@ -5,6 +5,7 @@
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#0D1117"
     tools:context="com.app.MainActivity">
 
     <LinearLayout
@@ -18,6 +19,35 @@
         app:layout_constraintTop_toTopOf="parent"
         tools:context="com.app.MainActivity">
 
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔒 NetCut"
+                android:textColor="#58A6FF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvKilledCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="#21262D"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="4dp"
+                android:text="⚡ 0"
+                android:textColor="#58A6FF"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <!-- Network Info -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -29,27 +59,32 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Gateway: Loading..."
-                android:textSize="14sp" />
+                android:text="🌐 Gateway: Loading..."
+                android:textColor="#8B949E"
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/tvIface"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Iface: wlan0"
-                android:textSize="14sp" />
+                android:text="📶 Iface: wlan0"
+                android:textColor="#8B949E"
+                android:textSize="13sp" />
         </LinearLayout>
 
+        <!-- Status -->
         <TextView
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:background="#f0f0f0"
-            android:padding="8dp"
+            android:layout_marginBottom="10dp"
+            android:background="#161B22"
+            android:padding="12dp"
             android:text="Ready"
-            android:textSize="16sp" />
+            android:textColor="#C9D1D9"
+            android:textSize="14sp" />
 
+        <!-- Buttons Row 1 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -58,43 +93,90 @@
 
             <Button
                 android:id="@+id/btnScan"
+                style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
-                android:text="Scan" />
+                android:background="@drawable/button_primary"
+                android:text="🔍 Scan"
+                android:textColor="#FFFFFF" />
 
             <Button
                 android:id="@+id/btnStop"
+                style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
-                android:backgroundTint="#D32F2F"
+                android:background="@drawable/button_danger"
                 android:enabled="false"
-                android:text="Stop Kill" />
+                android:text="⏹ Stop Kill"
+                android:textColor="#FFFFFF" />
 
             <Button
                 android:id="@+id/btnRestoreArp"
+                style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
                 android:layout_weight="1"
-                android:backgroundTint="#FF9800"
-                android:text="Restore ARP" />
-            <!-- Add to activity_main.xml -->
-
-
+                android:background="@drawable/button_warning"
+                android:text="🔄 Restore ARP"
+                android:textColor="#FFFFFF" />
         </LinearLayout>
 
+        <!-- Buttons Row 2 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnShowKilled"
+                style="@style/NetCutButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/button_secondary"
+                android:text="📋 Killed (0)"
+                android:textColor="#C9D1D9" />
+
+            <Button
+                android:id="@+id/btnShowDevices"
+                style="@style/NetCutButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:background="@drawable/button_secondary"
+                android:text="📱 Show Devices"
+                android:textColor="#C9D1D9"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Fragment Container -->
+        <FrameLayout
+            android:id="@+id/fragment_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="4dp"
+            android:visibility="gone" />
+
+        <!-- Device List -->
         <ListView
             android:id="@+id/lvDevices"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:divider="#e0e0e0"
-            android:dividerHeight="1dp" />
+            android:layout_marginTop="4dp"
+            android:divider="#21262D"
+            android:dividerHeight="1dp"
+            android:paddingVertical="4dp" />
 
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>

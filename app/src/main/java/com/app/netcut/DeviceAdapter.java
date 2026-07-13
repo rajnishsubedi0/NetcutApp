@@ -10,11 +10,16 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
+
 import java.util.List;
 
 public class DeviceAdapter extends ArrayAdapter<Device> {
+    private final Context context;
+
     public DeviceAdapter(Context ctx, List<Device> list) {
         super(ctx, 0, list);
+        this.context = ctx;
     }
 
     @NonNull
@@ -29,18 +34,41 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         TextView ip = convertView.findViewById(R.id.tvIp);
         TextView mac = convertView.findViewById(R.id.tvMac);
         TextView vendor = convertView.findViewById(R.id.tvVendor);
+        TextView statusBadge = convertView.findViewById(R.id.tvStatusBadge);
+        TextView customName = convertView.findViewById(R.id.tvCustomName);
 
-        String tag = d.isGateway ? " (Gateway)" : (d.isCut ? " (Cut)" : " (Online)");
-        ip.setText(d.ip + tag);
+        ip.setText(d.ip);
         mac.setText(d.mac);
         vendor.setText(d.vendor);
 
+        // Check if device is in killed list
+        KilledDevicesManager manager = KilledDevicesManager.getInstance(context);
+        KilledDeviceInfo info = manager.getDeviceInfo(d.mac);
+
         if (d.isGateway) {
+            statusBadge.setText("Gateway");
+            statusBadge.setTextColor(Color.parseColor("#FFC107"));
             ip.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
+            statusBadge.setText("🔴 Cut");
+            statusBadge.setTextColor(Color.parseColor("#F44336"));
             ip.setTextColor(Color.parseColor("#F44336"));
+        } else if (info != null) {
+            statusBadge.setText("💀 Killed");
+            statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
+            ip.setTextColor(Color.parseColor("#FF6B6B"));
         } else {
+            statusBadge.setText("🟢 Online");
+            statusBadge.setTextColor(Color.parseColor("#4CAF50"));
             ip.setTextColor(Color.parseColor("#4CAF50"));
+        }
+
+        // Show custom name if set
+        if (info != null && info.name != null && !info.name.isEmpty()) {
+            customName.setText("✏️ " + info.name);
+            customName.setVisibility(View.VISIBLE);
+        } else {
+            customName.setVisibility(View.GONE);
         }
 
         return convertView;

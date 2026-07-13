@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.View;
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -21,6 +22,10 @@ import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
+
+import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,12 +38,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERMISSION_REQUEST_CODE = 100;
 
-    private TextView tvGateway, tvIface, tvStatus;
-    private Button btnScan, btnStop, btnRestoreArp;
+    private TextView tvGateway, tvIface, tvStatus, tvKilledCount;
+    private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
     private ListView lvDevices;
 
     private final List<Device> devices = new ArrayList<>();
     private DeviceAdapter adapter;
+    private KilledDevicesFragment killedFragment;
+    private KilledDevicesManager killedManager;
 
     private final HostScanner scanner = new HostScanner();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -52,6 +59,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean isScanning = false;
     private boolean isRootAvailable = false;
     private boolean isStopping = false;
+    private boolean showingKilled = false;
+    private boolean autoScanDone = false;
 
     private final Map<String, DeviceSession> sessionsByDeviceId = new HashMap<>();
 
@@ -69,6 +78,9 @@ public class MainActivity extends AppCompatActivity {
 
         startService(new Intent(this, CleanupService.class));
 
+        killedManager = KilledDevicesManager.getInstance(this);
+        killedFragment = new KilledDevicesFragment();
+
         initializeViews();
 
         try {
@@ -85,6 +97,10 @@ public class MainActivity extends AppCompatActivity {
         requestPermissions();
         initializeNetworkInfo();
         setupClickListeners();
+        updateKilledCount();
+
+        // Auto-scan after a short delay
+        mainHandler.postDelayed(this::performAutoScan, 1500);
     }
 
     @Override
@@ -98,9 +114,12 @@ public class MainActivity extends AppCompatActivity {
         tvGateway = findViewById(R.id.tvGateway);
         tvIface = findViewById(R.id.tvIface);
         tvStatus = findViewById(R.id.tvStatus);
+        tvKilledCount = findViewById(R.id.tvKilledCount);
         btnScan = findViewById(R.id.btnScan);
         btnStop = findViewById(R.id.btnStop);
         btnRestoreArp = findViewById(R.id.btnRestoreArp);
+        btnShowKilled = findViewById(R.id.btnShowKilled);
+        btnShowDevices = findViewById(R.id.btnShowDevices);
         lvDevices = findViewById(R.id.lvDevices);
 
         adapter = new DeviceAdapter(this, devices);
@@ -108,6 +127,7 @@ public class MainActivity extends AppCompatActivity {
 
         btnStop.setEnabled(false);
         btnRestoreArp.setEnabled(true);
+        btnShowDevices.setVisibility(View.GONE);
         tvStatus.setText("Ready");
     }
 
@@ -120,9 +140,10 @@ public class MainActivity extends AppCompatActivity {
         if (!isRootAvailable) {
             new AlertDialog.Builder(this)
                     .setTitle("Root Required")
-                    .setMessage("This app requires root.")
+                    .setMessage("This app requires root access to function properly.")
                     .setPositiveButton("Check Again", (d, w) -> checkRootAccess())
                     .setNegativeButton("Continue", null)
+//                    .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                     .show();
         }
     }
@@ -157,8 +178,8 @@ public class MainActivity extends AppCompatActivity {
     private void initializeNetworkInfo() {
         try {
             gatewayIp = NetUtils.getGatewayIp(this);
-            tvGateway.setText("Gateway: " + gatewayIp);
-            tvIface.setText("Iface: " + iface);
+            tvGateway.setText("🌐 Gateway: " + gatewayIp);
+            tvIface.setText("📶 Iface: " + iface);
         } catch (Exception e) {
             Toast.makeText(this, "Failed to get network info", Toast.LENGTH_SHORT).show();
             Log.e(TAG, "initializeNetworkInfo failed", e);
@@ -169,6 +190,8 @@ public class MainActivity extends AppCompatActivity {
         btnScan.setOnClickListener(v -> startScan());
         btnStop.setOnClickListener(v -> stopAllSessions());
         btnRestoreArp.setOnClickListener(v -> restoreAllArp());
+        btnShowKilled.setOnClickListener(v -> showKilledDevices());
+        btnShowDevices.setOnClickListener(v -> showDevices());
 
         lvDevices.setOnItemClickListener((parent, view, position, id) -> {
             Device d = devices.get(position);
@@ -179,11 +202,73 @@ public class MainActivity extends AppCompatActivity {
             }
 
             if (!isRootAvailable) {
-                Toast.makeText(this, "Root required", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Root access required", Toast.LENGTH_SHORT).show();
                 return;
             }
 
             showDeviceDialog(d);
+        });
+    }
+
+    private void performAutoScan() {
+        if (autoScanDone) return;
+        autoScanDone = true;
+
+        if (isRootAvailable && !isScanning && devices.isEmpty()) {
+            Log.d(TAG, "Performing auto-scan...");
+            Toast.makeText(this, "Auto-scanning network...", Toast.LENGTH_SHORT).show();
+            startScan();
+        }
+    }
+
+    private void showKilledDevices() {
+        showingKilled = true;
+        btnShowKilled.setVisibility(View.GONE);
+        btnShowDevices.setVisibility(View.VISIBLE);
+        tvStatus.setText("📋 Killed Devices (" + killedManager.getCount() + ")");
+
+        FragmentManager fm = getSupportFragmentManager();
+        FragmentTransaction ft = fm.beginTransaction();
+        ft.replace(R.id.fragment_container, killedFragment);
+        ft.commit();
+
+        lvDevices.setVisibility(View.GONE);
+        findViewById(R.id.fragment_container).setVisibility(View.VISIBLE);
+
+        if (killedFragment != null) {
+            killedFragment.refresh();
+        }
+    }
+
+    private void showDevices() {
+        showingKilled = false;
+        btnShowKilled.setVisibility(View.VISIBLE);
+        btnShowDevices.setVisibility(View.GONE);
+        tvStatus.setText("📱 Devices (" + devices.size() + ")");
+
+        FragmentManager fm = getSupportFragmentManager();
+        FragmentTransaction ft = fm.beginTransaction();
+        ft.remove(killedFragment);
+        ft.commit();
+
+        lvDevices.setVisibility(View.VISIBLE);
+        findViewById(R.id.fragment_container).setVisibility(View.GONE);
+        updateKilledCount();
+    }
+
+    private void updateKilledCount() {
+        // Must run on UI thread
+        mainHandler.post(() -> {
+            if (tvKilledCount != null) {
+                int count = killedManager.getCount();
+                tvKilledCount.setText("⚡ " + count);
+                if (count > 0 && !showingKilled) {
+                    btnShowKilled.setVisibility(View.VISIBLE);
+                    btnShowKilled.setText("📋 Killed (" + count + ")");
+                } else if (count == 0) {
+                    btnShowKilled.setVisibility(View.GONE);
+                }
+            }
         });
     }
 
@@ -197,12 +282,18 @@ public class MainActivity extends AppCompatActivity {
         adapter.notifyDataSetChanged();
         isScanning = true;
         btnScan.setEnabled(false);
-        tvStatus.setText("Scanning...");
+        btnScan.setText("⏳ Scanning...");
+        tvStatus.setText("📡 Scanning network...");
 
         scanner.scan(this, new HostScanner.ScanCallback() {
             @Override
             public void onProgress(int done, int total) {
-                mainHandler.post(() -> tvStatus.setText("Scanning " + done + "/" + total));
+                mainHandler.post(() -> {
+                    tvStatus.setText("📡 Scanning " + done + "/" + total);
+                    if (total > 0) {
+                        btnScan.setText("⏳ " + done + "/" + total);
+                    }
+                });
             }
 
             @Override
@@ -211,31 +302,66 @@ public class MainActivity extends AppCompatActivity {
                     devices.clear();
                     devices.addAll(found);
 
+                    // Check for killed devices
                     for (Device d : devices) {
                         DeviceSession s = sessionsByDeviceId.get(d.deviceId);
-                        d.isCut = s != null && s.running;
+                        boolean wasKilled = killedManager.isDeviceKilled(d);
+
+                        if (wasKilled && (s == null || !s.running)) {
+                            d.isCut = true;
+                            // Restore this session
+                            restoreKilledSession(d);
+                        } else if (s != null && s.running) {
+                            d.isCut = true;
+                        } else {
+                            d.isCut = false;
+                        }
+                    }
+
+                    // Update killed fragment with device details
+                    if (killedFragment != null) {
+                        for (Device d : found) {
+                            killedFragment.updateDevice(d);
+                        }
                     }
 
                     adapter.notifyDataSetChanged();
                     isScanning = false;
                     btnScan.setEnabled(true);
-                    tvStatus.setText("Found " + found.size() + " devices. Tap one to kill.");
+                    btnScan.setText("🔍 Scan");
+                    tvStatus.setText("✅ Found " + found.size() + " devices. Tap to kill.");
+                    updateKilledCount();
                 });
             }
         });
     }
 
+    private void restoreKilledSession(Device d) {
+        if (d != null && d.mac != null && !d.mac.isEmpty()) {
+            Log.d(TAG, "Auto-restoring killed session for: " + d.mac);
+            startSession(d);
+        }
+    }
+
     private void showDeviceDialog(Device d) {
         DeviceSession session = sessionsByDeviceId.get(d.deviceId);
         boolean isRunning = session != null && session.running;
+        boolean isKilled = killedManager.isDeviceKilled(d);
 
-        String title = isRunning ? "Manage Target" : "Target Device";
-        String action = isRunning ? "Unkill" : "Kill";
+        String title = isRunning ? "⚡ Manage Target" : "🎯 Target Device";
+        String action = isRunning ? "🔄 Unkill" : "🔪 Kill";
 
-        String msg = "IP: " + d.ip
-                + "\nMAC: " + d.mac
-                + "\nVendor: " + d.vendor
-                + "\nState: " + (isRunning ? "Cut" : "Online");
+        String msg = "📱 IP: " + d.ip +
+                "\n🔗 MAC: " + d.mac +
+                "\n🏷️ Vendor: " + d.vendor +
+                "\n📊 State: " + (isRunning ? "🔴 Cut" : (isKilled ? "💀 Killed (saved)" : "🟢 Online"));
+
+        if (isKilled) {
+            KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
+            if (info != null && info.name != null && !info.name.isEmpty()) {
+                msg += "\n✏️ Name: " + info.name;
+            }
+        }
 
         new AlertDialog.Builder(this)
                 .setTitle(title)
@@ -247,8 +373,40 @@ public class MainActivity extends AppCompatActivity {
                         startSession(d);
                     }
                 })
-                .setNeutralButton("Cancel", null)
+                .setNeutralButton("Set Name", (dialog, which) -> showSetNameDialog(d))
+                .setNegativeButton("Cancel", null)
+//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
+    }
+
+    private void showSetNameDialog(Device d) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("✏️ Set Custom Name");
+
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        input.setHint("Enter device name");
+
+        KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
+        if (info != null && info.name != null && !info.name.isEmpty()) {
+            input.setText(info.name);
+        }
+
+        builder.setView(input);
+        builder.setPositiveButton("Save", (dialog, which) -> {
+            String name = input.getText().toString().trim();
+            if (!name.isEmpty()) {
+                killedManager.setDeviceName(d.mac, name);
+                updateKilledCount();
+                if (killedFragment != null) killedFragment.refresh();
+                Toast.makeText(this, "✅ Device name updated to: " + name, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Name cannot be empty", Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+//        builder.setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK);
+        builder.show();
     }
 
     private void startSession(Device d) {
@@ -274,12 +432,17 @@ public class MainActivity extends AppCompatActivity {
                             session.running = true;
                             session.stopping = false;
                             d.isCut = true;
+
+                            killedManager.addKilledDevice(d);
+                            if (killedFragment != null) killedFragment.refresh();
+                            updateKilledCount();
+
                             adapter.notifyDataSetChanged();
-                            tvStatus.setText("Running for " + d.ip + " pid=" + pid);
+                            tvStatus.setText("🔴 Running for " + d.ip + " (pid: " + pid + ")");
                             btnStop.setEnabled(true);
                             btnScan.setEnabled(false);
                             Toast.makeText(MainActivity.this,
-                                    "Started for " + d.ip,
+                                    "🔪 Started killing " + d.ip,
                                     Toast.LENGTH_SHORT).show();
                         });
                     }
@@ -291,13 +454,15 @@ public class MainActivity extends AppCompatActivity {
                             session.stopping = false;
                             session.pid = -1;
                             d.isCut = false;
+
                             adapter.notifyDataSetChanged();
-                            tvStatus.setText("Stopped for " + d.ip);
+                            tvStatus.setText("🟢 Stopped for " + d.ip);
                             btnStop.setEnabled(false);
                             btnScan.setEnabled(true);
                             isStopping = false;
+                            updateKilledCount();
                             Toast.makeText(MainActivity.this,
-                                    "Restored " + d.ip,
+                                    "✅ Internet restored for " + d.ip,
                                     Toast.LENGTH_SHORT).show();
                         });
                     }
@@ -308,14 +473,14 @@ public class MainActivity extends AppCompatActivity {
                             session.running = false;
                             session.stopping = false;
                             session.pid = -1;
-                            d.isCut = false;
+                            d.isCut = true;
                             adapter.notifyDataSetChanged();
-                            tvStatus.setText("Crashed for " + d.ip);
+                            tvStatus.setText("⚠️ Crashed for " + d.ip);
                             btnStop.setEnabled(false);
                             btnScan.setEnabled(true);
                             isStopping = false;
                             Toast.makeText(MainActivity.this,
-                                    "Session crashed: " + d.ip,
+                                    "⚠️ Session crashed: " + d.ip,
                                     Toast.LENGTH_SHORT).show();
                         });
 
@@ -343,16 +508,41 @@ public class MainActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     sessionsByDeviceId.remove(sessionKey);
                     d.isCut = false;
+                    killedManager.removeKilledDevice(d);
                     adapter.notifyDataSetChanged();
-                    tvStatus.setText("Failed to start for " + d.ip);
+                    tvStatus.setText("❌ Failed to start for " + d.ip);
                     btnScan.setEnabled(true);
                     btnStop.setEnabled(false);
+                    updateKilledCount();
                     Toast.makeText(MainActivity.this,
                             "Failed to start for " + d.ip,
                             Toast.LENGTH_LONG).show();
                 });
             }
         }).start();
+    }
+
+    public void unkillDevice(Device d) {
+        if (d == null) return;
+
+        DeviceSession session = sessionsByDeviceId.get(d.deviceId);
+        if (session != null && session.running) {
+            stopSession(d);
+        } else {
+            killedManager.removeKilledDevice(d);
+            if (killedFragment != null) killedFragment.refresh();
+            updateKilledCount();
+
+            for (Device device : devices) {
+                if (device.mac != null && device.mac.equals(d.mac)) {
+                    device.isCut = false;
+                    adapter.notifyDataSetChanged();
+                    break;
+                }
+            }
+
+            Toast.makeText(this, "✅ Device removed from killed list", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void stopSession(Device d) {
@@ -371,22 +561,17 @@ public class MainActivity extends AppCompatActivity {
 
         isStopping = true;
         session.stopping = true;
-        tvStatus.setText("Stopping " + d.ip + "...");
+        tvStatus.setText("⏹ Stopping " + d.ip + "...");
         btnStop.setEnabled(false);
         btnScan.setEnabled(false);
 
         new Thread(() -> {
             try {
-                // IMMEDIATELY restore ARP for this specific device in parallel
                 Thread arpThread = new Thread(() -> {
                     try {
-                        // Restore ARP immediately using the snapshot for this session
                         boolean restored = arpRestore.flushAndRestoreFast(sessionKey);
                         Log.d(TAG, "ARP restore for " + sessionKey + ": " + (restored ? "success" : "failed"));
-
-                        // If restore failed, try one more time with a fresh snapshot
                         if (!restored) {
-                            Log.w(TAG, "ARP restore failed, retrying for " + sessionKey);
                             arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
                             arpRestore.flushAndRestoreFast(sessionKey);
                         }
@@ -396,37 +581,33 @@ public class MainActivity extends AppCompatActivity {
                 });
                 arpThread.start();
 
-                // Stop the runner
                 if (session.runner != null && session.running) {
                     session.runner.stop();
                 }
 
-                // Wait briefly for the runner to stop (max 1 second)
                 int waitCount = 0;
                 while (session.running && waitCount < 10) {
-                    try {
-                        Thread.sleep(100);
-                    } catch (InterruptedException ignored) {}
+                    try { Thread.sleep(100); } catch (InterruptedException ignored) {}
                     waitCount++;
                 }
 
-                // If still running, emergency stop
                 if (session.running) {
                     Log.w(TAG, "Runner still running, emergency stop for " + sessionKey);
                     if (session.runner != null) {
                         session.runner.emergencyStop();
                         session.runner.destroy();
                     }
-                    // Ensure ARP is restored
                     arpRestore.flushAndRestoreFast(sessionKey);
                 }
 
-                // Wait for ARP thread to complete (max 1 second)
-                try {
-                    arpThread.join(1000);
-                } catch (InterruptedException ignored) {}
+                try { arpThread.join(1000); } catch (InterruptedException ignored) {}
 
-                // Update UI and cleanup
+                mainHandler.post(() -> {
+                    killedManager.removeKilledDevice(d);
+                    if (killedFragment != null) killedFragment.refresh();
+                    updateKilledCount();
+                });
+
                 mainHandler.post(() -> {
                     session.running = false;
                     session.stopping = false;
@@ -434,41 +615,48 @@ public class MainActivity extends AppCompatActivity {
                     d.isCut = false;
                     sessionsByDeviceId.remove(sessionKey);
                     adapter.notifyDataSetChanged();
-                    tvStatus.setText("Internet restored for " + d.ip);
+                    tvStatus.setText("✅ Internet restored for " + d.ip);
                     btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
                     isStopping = false;
                     Toast.makeText(MainActivity.this,
-                            "Internet restored for " + d.ip,
+                            "✅ Internet restored for " + d.ip,
                             Toast.LENGTH_SHORT).show();
                 });
 
             } catch (Exception e) {
                 Log.e(TAG, "Stop session failed for " + d.ip, e);
-
-                // Emergency cleanup
-                try {
-                    if (session.runner != null) {
-                        session.runner.emergencyStop();
-                        session.runner.destroy();
-                    }
-                    arpRestore.flushAndRestoreFast(sessionKey);
-                } catch (Exception ignored) {}
-
-                mainHandler.post(() -> {
-                    sessionsByDeviceId.remove(sessionKey);
-                    d.isCut = false;
-                    adapter.notifyDataSetChanged();
-                    tvStatus.setText("Emergency stopped " + d.ip);
-                    btnStop.setEnabled(false);
-                    btnScan.setEnabled(true);
-                    isStopping = false;
-                    Toast.makeText(MainActivity.this,
-                            "Internet restored for " + d.ip,
-                            Toast.LENGTH_SHORT).show();
-                });
+                handleStopFailure(session, d, sessionKey);
             }
         }).start();
+    }
+
+    private void handleStopFailure(DeviceSession session, Device d, String sessionKey) {
+        try {
+            if (session.runner != null) {
+                session.runner.emergencyStop();
+                session.runner.destroy();
+            }
+            arpRestore.flushAndRestoreFast(sessionKey);
+            mainHandler.post(() -> {
+                killedManager.removeKilledDevice(d);
+                if (killedFragment != null) killedFragment.refresh();
+                updateKilledCount();
+            });
+        } catch (Exception ignored) {}
+
+        mainHandler.post(() -> {
+            sessionsByDeviceId.remove(sessionKey);
+            d.isCut = false;
+            adapter.notifyDataSetChanged();
+            tvStatus.setText("🔄 Emergency stopped " + d.ip);
+            btnStop.setEnabled(false);
+            btnScan.setEnabled(true);
+            isStopping = false;
+            Toast.makeText(MainActivity.this,
+                    "✅ Internet restored for " + d.ip,
+                    Toast.LENGTH_SHORT).show();
+        });
     }
 
     private void stopAllSessions() {
@@ -483,7 +671,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         isStopping = true;
-        tvStatus.setText("Stopping all sessions...");
+        tvStatus.setText("⏹ Stopping all sessions...");
         btnStop.setEnabled(false);
         btnScan.setEnabled(false);
 
@@ -496,12 +684,14 @@ public class MainActivity extends AppCompatActivity {
                         session.pid = -1;
                         session.device.isCut = false;
                         arpRestore.flushAndRestoreFast(session.sessionKey);
+                        killedManager.removeKilledDevice(session.device);
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
                         try {
                             session.runner.emergencyStop();
                             session.runner.destroy();
                             arpRestore.flushAndRestoreFast(session.sessionKey);
+                            killedManager.removeKilledDevice(session.device);
                         } catch (Exception ignored) {}
                     }
                 }
@@ -510,13 +700,15 @@ public class MainActivity extends AppCompatActivity {
             sessionsByDeviceId.clear();
 
             mainHandler.post(() -> {
+                if (killedFragment != null) killedFragment.refresh();
+                updateKilledCount();
                 adapter.notifyDataSetChanged();
-                tvStatus.setText("All sessions stopped");
+                tvStatus.setText("✅ All sessions stopped");
                 btnStop.setEnabled(false);
                 btnScan.setEnabled(true);
                 isStopping = false;
                 Toast.makeText(MainActivity.this,
-                        "All sessions stopped and ARP restored",
+                        "✅ All sessions stopped and ARP restored",
                         Toast.LENGTH_SHORT).show();
             });
         }).start();
@@ -528,7 +720,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // Stop all sessions first
         if (!sessionsByDeviceId.isEmpty()) {
             Toast.makeText(this, "Stopping sessions first...", Toast.LENGTH_SHORT).show();
             stopAllSessions();
@@ -536,15 +727,16 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Restore Internet")
+                .setTitle("🔄 Restore Internet")
                 .setMessage("This will restore ARP table for all devices.\n\nContinue?")
                 .setPositiveButton("Restore", (d, w) -> doRestoreAllArp())
                 .setNegativeButton("Cancel", null)
+//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
     }
 
     private void doRestoreAllArp() {
-        tvStatus.setText("Restoring ARP...");
+        tvStatus.setText("🔄 Restoring ARP...");
         btnRestoreArp.setEnabled(false);
 
         new Thread(() -> {
@@ -563,12 +755,12 @@ public class MainActivity extends AppCompatActivity {
             final boolean success = allSuccess;
             mainHandler.post(() -> {
                 if (success) {
-                    tvStatus.setText("ARP restored successfully");
+                    tvStatus.setText("✅ ARP restored successfully");
                     Toast.makeText(MainActivity.this,
-                            "ARP restored for all devices",
+                            "✅ ARP restored for all devices",
                             Toast.LENGTH_SHORT).show();
                 } else {
-                    tvStatus.setText("Partial ARP restore");
+                    tvStatus.setText("⚠️ Partial ARP restore");
                     Toast.makeText(MainActivity.this,
                             "Some ARP entries may not have restored",
                             Toast.LENGTH_LONG).show();
@@ -591,7 +783,17 @@ public class MainActivity extends AppCompatActivity {
                         Toast.LENGTH_LONG).show();
             } else {
                 initializeNetworkInfo();
+                performAutoScan();
             }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateKilledCount();
+        if (killedFragment != null && showingKilled) {
+            killedFragment.refresh();
         }
     }
 }
