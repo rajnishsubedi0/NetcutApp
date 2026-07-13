@@ -143,7 +143,6 @@ public class MainActivity extends AppCompatActivity {
                     .setMessage("This app requires root access to function properly.")
                     .setPositiveButton("Check Again", (d, w) -> checkRootAccess())
                     .setNegativeButton("Continue", null)
-//                    .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                     .show();
         }
     }
@@ -375,7 +374,6 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNeutralButton("Set Name", (dialog, which) -> showSetNameDialog(d))
                 .setNegativeButton("Cancel", null)
-//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
     }
 
@@ -405,7 +403,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         builder.setNegativeButton("Cancel", null);
-//        builder.setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK);
         builder.show();
     }
 
@@ -454,6 +451,9 @@ public class MainActivity extends AppCompatActivity {
                             session.stopping = false;
                             session.pid = -1;
                             d.isCut = false;
+
+                            // Keep device in killed list if it was intentionally stopped
+                            // The stopSession will handle removal if needed
 
                             adapter.notifyDataSetChanged();
                             tvStatus.setText("🟢 Stopped for " + d.ip);
@@ -602,6 +602,7 @@ public class MainActivity extends AppCompatActivity {
 
                 try { arpThread.join(1000); } catch (InterruptedException ignored) {}
 
+                // Remove from killed list only when explicitly unkilling
                 mainHandler.post(() -> {
                     killedManager.removeKilledDevice(d);
                     if (killedFragment != null) killedFragment.refresh();
@@ -684,14 +685,16 @@ public class MainActivity extends AppCompatActivity {
                         session.pid = -1;
                         session.device.isCut = false;
                         arpRestore.flushAndRestoreFast(session.sessionKey);
-                        killedManager.removeKilledDevice(session.device);
+                        // Don't remove from killed list here - keep them saved
+                        // killedManager.removeKilledDevice(session.device);
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
                         try {
                             session.runner.emergencyStop();
                             session.runner.destroy();
                             arpRestore.flushAndRestoreFast(session.sessionKey);
-                            killedManager.removeKilledDevice(session.device);
+                            // Don't remove from killed list here
+                            // killedManager.removeKilledDevice(session.device);
                         } catch (Exception ignored) {}
                     }
                 }
@@ -703,12 +706,12 @@ public class MainActivity extends AppCompatActivity {
                 if (killedFragment != null) killedFragment.refresh();
                 updateKilledCount();
                 adapter.notifyDataSetChanged();
-                tvStatus.setText("✅ All sessions stopped");
+                tvStatus.setText("✅ All sessions stopped (killed list preserved)");
                 btnStop.setEnabled(false);
                 btnScan.setEnabled(true);
                 isStopping = false;
                 Toast.makeText(MainActivity.this,
-                        "✅ All sessions stopped and ARP restored",
+                        "✅ All sessions stopped. Killed devices preserved.",
                         Toast.LENGTH_SHORT).show();
             });
         }).start();
@@ -720,18 +723,30 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        // If there are active sessions, ask user if they want to stop them
         if (!sessionsByDeviceId.isEmpty()) {
-            Toast.makeText(this, "Stopping sessions first...", Toast.LENGTH_SHORT).show();
-            stopAllSessions();
+            new AlertDialog.Builder(this)
+                    .setTitle("🔄 Active Sessions Found")
+                    .setMessage("There are active sessions running. Do you want to stop them and restore ARP?")
+                    .setPositiveButton("Yes, Stop All", (d, w) -> {
+                        stopAllSessions();
+                        // After stopping, restore ARP
+                        mainHandler.postDelayed(() -> {
+                            if (sessionsByDeviceId.isEmpty()) {
+                                doRestoreAllArp();
+                            }
+                        }, 1000);
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
             return;
         }
 
         new AlertDialog.Builder(this)
                 .setTitle("🔄 Restore Internet")
-                .setMessage("This will restore ARP table for all devices.\n\nContinue?")
+                .setMessage("This will restore ARP table for all devices.\n\nKilled devices will remain in the list.\n\nContinue?")
                 .setPositiveButton("Restore", (d, w) -> doRestoreAllArp())
                 .setNegativeButton("Cancel", null)
-//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
     }
 
@@ -741,14 +756,36 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             boolean allSuccess = true;
-            for (String sessionKey : sessionsByDeviceId.keySet()) {
+
+            // If there are no sessions, just restore ARP for gateway
+            if (sessionsByDeviceId.isEmpty()) {
                 try {
-                    if (!arpRestore.flushAndRestoreFast(sessionKey)) {
-                        allSuccess = false;
+                    // Try to restore using current gateway
+                    String currentGateway = NetUtils.getGatewayIp(MainActivity.this);
+                    if (currentGateway != null && !currentGateway.isEmpty()) {
+                        // We need to capture a fresh snapshot first
+                        // Use a dummy session key for restoration
+                        String tempKey = "temp_restore_" + System.currentTimeMillis();
+                        arpRestore.captureTrustedSnapshot(MainActivity.this, tempKey, null, null);
+                        boolean result = arpRestore.flushAndRestoreFast(tempKey);
+                        arpRestore.removeSnapshot(tempKey);
+                        allSuccess = result;
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to restore ARP for " + sessionKey, e);
+                    Log.e(TAG, "ARP restore fallback failed", e);
                     allSuccess = false;
+                }
+            } else {
+                // Restore ARP for all active sessions
+                for (String sessionKey : sessionsByDeviceId.keySet()) {
+                    try {
+                        if (!arpRestore.flushAndRestoreFast(sessionKey)) {
+                            allSuccess = false;
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to restore ARP for " + sessionKey, e);
+                        allSuccess = false;
+                    }
                 }
             }
 
@@ -757,7 +794,7 @@ public class MainActivity extends AppCompatActivity {
                 if (success) {
                     tvStatus.setText("✅ ARP restored successfully");
                     Toast.makeText(MainActivity.this,
-                            "✅ ARP restored for all devices",
+                            "✅ ARP restored. Killed devices preserved.",
                             Toast.LENGTH_SHORT).show();
                 } else {
                     tvStatus.setText("⚠️ Partial ARP restore");
