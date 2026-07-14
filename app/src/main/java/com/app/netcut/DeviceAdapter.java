@@ -61,15 +61,15 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
             statusBadge.setTextColor(Color.parseColor("#FFC107"));
             ip.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
-            statusBadge.setText("🟢 Revive");
+            statusBadge.setText("Revive");
             statusBadge.setTextColor(Color.parseColor("#4CAF50"));
             ip.setTextColor(Color.parseColor("#F44336"));
         } else if (info != null) {
-            statusBadge.setText("🔴 Processing");
+            statusBadge.setText("Processing");
             statusBadge.setTextColor(Color.parseColor("#FFBF00"));
             ip.setTextColor(Color.parseColor("#FF6B6B"));
         } else {
-            statusBadge.setText("💀 Kill");
+            statusBadge.setText("Cut");
             statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
             ip.setTextColor(Color.parseColor("#4CAF50"));
         }

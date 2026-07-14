@@ -225,7 +225,6 @@ public class MainActivity extends AppCompatActivity {
 
         if (isRootAvailable && !isScanning.get() && devices.isEmpty()) {
             Log.d(TAG, "Performing auto-scan...");
-            Toast.makeText(this, "Auto-scanning network...", Toast.LENGTH_SHORT).show();
             startScan();
         }
     }
@@ -404,9 +403,7 @@ public class MainActivity extends AppCompatActivity {
                             tvStatus.setText("🔴 Running for " + d.ip + " (pid: " + pid + ")");
                             btnStop.setEnabled(true);
                             btnScan.setEnabled(false);
-                            Toast.makeText(MainActivity.this,
-                                    "🔪 Started killing " + d.ip,
-                                    Toast.LENGTH_SHORT).show();
+
                         });
                     }
 
@@ -427,9 +424,7 @@ public class MainActivity extends AppCompatActivity {
                             btnScan.setEnabled(true);
                             isStopping.set(false);
                             updateKilledCount();
-                            Toast.makeText(MainActivity.this,
-                                    "✅ Internet restored for " + d.ip,
-                                    Toast.LENGTH_SHORT).show();
+
                         });
                     }
 
@@ -619,9 +614,7 @@ public class MainActivity extends AppCompatActivity {
                     btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
                     isStopping.set(false);
-                    Toast.makeText(MainActivity.this,
-                            "✅ Internet restored for " + d.ip,
-                            Toast.LENGTH_SHORT).show();
+
                 });
 
             } catch (Exception e) {
@@ -656,9 +649,7 @@ public class MainActivity extends AppCompatActivity {
             btnScan.setEnabled(true);
             isStopping.set(false);
             startRetryCount.remove(sessionKey);
-            Toast.makeText(MainActivity.this,
-                    "✅ Internet restored for " + d.ip,
-                    Toast.LENGTH_SHORT).show();
+
         });
     }
 
@@ -791,14 +782,10 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 if (success) {
                     tvStatus.setText("✅ ARP restored successfully");
-                    Toast.makeText(MainActivity.this,
-                            "✅ ARP restored. Killed devices preserved.",
-                            Toast.LENGTH_SHORT).show();
+
                 } else {
-                    tvStatus.setText("⚠️ Partial ARP restore");
-                    Toast.makeText(MainActivity.this,
-                            "Some ARP entries may not have restored",
-                            Toast.LENGTH_LONG).show();
+                    tvStatus.setText("✅⚠️ Some ARP entries may not have restored");
+
                 }
                 btnRestoreArp.setEnabled(true);
             });
