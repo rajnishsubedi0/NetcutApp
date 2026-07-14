@@ -44,7 +44,7 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         ip.setText(d.ip);
         mac.setText(d.mac);
         vendor.setText(d.vendor);
-        
+
         statusBadge.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -61,16 +61,16 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
             statusBadge.setTextColor(Color.parseColor("#FFC107"));
             ip.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
-            statusBadge.setText("🔴 Cut");
-            statusBadge.setTextColor(Color.parseColor("#F44336"));
+            statusBadge.setText("🟢 Revive");
+            statusBadge.setTextColor(Color.parseColor("#4CAF50"));
             ip.setTextColor(Color.parseColor("#F44336"));
         } else if (info != null) {
-            statusBadge.setText("💀 Killed");
-            statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
+            statusBadge.setText("🔴 Processing");
+            statusBadge.setTextColor(Color.parseColor("#FFBF00"));
             ip.setTextColor(Color.parseColor("#FF6B6B"));
         } else {
-            statusBadge.setText("🟢 Online");
-            statusBadge.setTextColor(Color.parseColor("#4CAF50"));
+            statusBadge.setText("💀 Kill");
+            statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
             ip.setTextColor(Color.parseColor("#4CAF50"));
         }
 
