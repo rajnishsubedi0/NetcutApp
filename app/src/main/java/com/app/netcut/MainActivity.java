@@ -32,11 +32,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private static final int PERMISSION_REQUEST_CODE = 100;
+    private static final int MAX_START_RETRIES = 3;
+    private static final long RETRY_DELAY_MS = 2000;
 
     private TextView tvGateway, tvIface, tvStatus, tvKilledCount;
     private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
@@ -63,6 +66,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean autoScanDone = false;
 
     private final Map<String, DeviceSession> sessionsByDeviceId = new HashMap<>();
+    private final Map<String, Integer> startRetryCount = new HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -256,7 +260,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateKilledCount() {
-        // Must run on UI thread
         mainHandler.post(() -> {
             if (tvKilledCount != null) {
                 int count = killedManager.getCount();
@@ -301,14 +304,12 @@ public class MainActivity extends AppCompatActivity {
                     devices.clear();
                     devices.addAll(found);
 
-                    // Check for killed devices
                     for (Device d : devices) {
                         DeviceSession s = sessionsByDeviceId.get(d.deviceId);
                         boolean wasKilled = killedManager.isDeviceKilled(d);
 
                         if (wasKilled && (s == null || !s.running)) {
                             d.isCut = true;
-                            // Restore this session
                             restoreKilledSession(d);
                         } else if (s != null && s.running) {
                             d.isCut = true;
@@ -317,7 +318,6 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    // Update killed fragment with device details
                     if (killedFragment != null) {
                         for (Device d : found) {
                             killedFragment.updateDevice(d);
@@ -338,8 +338,27 @@ public class MainActivity extends AppCompatActivity {
     private void restoreKilledSession(Device d) {
         if (d != null && d.mac != null && !d.mac.isEmpty()) {
             Log.d(TAG, "Auto-restoring killed session for: " + d.mac);
-            startSession(d);
+            startSessionWithRetry(d);
         }
+    }
+
+    private void startSessionWithRetry(Device d) {
+        String sessionKey = d.deviceId;
+        int retryCount = startRetryCount.getOrDefault(sessionKey, 0);
+
+        if (retryCount >= MAX_START_RETRIES) {
+            Log.w(TAG, "Max retries reached for " + d.ip + ", giving up");
+            mainHandler.post(() -> {
+                Toast.makeText(MainActivity.this,
+                        "Failed to start session for " + d.ip + " after " + MAX_START_RETRIES + " attempts",
+                        Toast.LENGTH_LONG).show();
+            });
+            startRetryCount.remove(sessionKey);
+            return;
+        }
+
+        startRetryCount.put(sessionKey, retryCount + 1);
+        startSession(d);
     }
 
     private void showDeviceDialog(Device d) {
@@ -369,7 +388,7 @@ public class MainActivity extends AppCompatActivity {
                     if (isRunning) {
                         stopSession(d);
                     } else {
-                        startSession(d);
+                        startSessionWithRetry(d);
                     }
                 })
                 .setNeutralButton("Set Name", (dialog, which) -> showSetNameDialog(d))
@@ -430,6 +449,9 @@ public class MainActivity extends AppCompatActivity {
                             session.stopping = false;
                             d.isCut = true;
 
+                            // Reset retry count on successful start
+                            startRetryCount.remove(sessionKey);
+
                             killedManager.addKilledDevice(d);
                             if (killedFragment != null) killedFragment.refresh();
                             updateKilledCount();
@@ -452,9 +474,6 @@ public class MainActivity extends AppCompatActivity {
                             session.pid = -1;
                             d.isCut = false;
 
-                            // Keep device in killed list if it was intentionally stopped
-                            // The stopSession will handle removal if needed
-
                             adapter.notifyDataSetChanged();
                             tvStatus.setText("🟢 Stopped for " + d.ip);
                             btnStop.setEnabled(false);
@@ -474,14 +493,32 @@ public class MainActivity extends AppCompatActivity {
                             session.stopping = false;
                             session.pid = -1;
                             d.isCut = true;
-                            adapter.notifyDataSetChanged();
-                            tvStatus.setText("⚠️ Crashed for " + d.ip);
-                            btnStop.setEnabled(false);
-                            btnScan.setEnabled(true);
-                            isStopping = false;
-                            Toast.makeText(MainActivity.this,
-                                    "⚠️ Session crashed: " + d.ip,
-                                    Toast.LENGTH_SHORT).show();
+
+                            // Check if we should retry
+                            int retryCount = startRetryCount.getOrDefault(sessionKey, 0);
+                            if (retryCount < MAX_START_RETRIES &&
+                                    (reason == null || !reason.contains("user stopped"))) {
+                                Log.d(TAG, "Session crashed, scheduling retry " + (retryCount + 1) +
+                                        " for " + d.ip);
+                                tvStatus.setText("🔄 Retrying " + d.ip + " (" + (retryCount + 1) + "/" +
+                                        MAX_START_RETRIES + ")");
+
+                                mainHandler.postDelayed(() -> {
+                                    if (!session.stopping && !isStopping) {
+                                        startSessionWithRetry(d);
+                                    }
+                                }, RETRY_DELAY_MS);
+                            } else {
+                                adapter.notifyDataSetChanged();
+                                tvStatus.setText("⚠️ Crashed for " + d.ip);
+                                btnStop.setEnabled(false);
+                                btnScan.setEnabled(true);
+                                isStopping = false;
+                                Toast.makeText(MainActivity.this,
+                                        "⚠️ Session crashed: " + d.ip,
+                                        Toast.LENGTH_SHORT).show();
+                                startRetryCount.remove(sessionKey);
+                            }
                         });
 
                         new Thread(() -> {
@@ -515,8 +552,9 @@ public class MainActivity extends AppCompatActivity {
                     btnStop.setEnabled(false);
                     updateKilledCount();
                     Toast.makeText(MainActivity.this,
-                            "Failed to start for " + d.ip,
+                            "Failed to start for " + d.ip + ": " + e.getMessage(),
                             Toast.LENGTH_LONG).show();
+                    startRetryCount.remove(sessionKey);
                 });
             }
         }).start();
@@ -532,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
             killedManager.removeKilledDevice(d);
             if (killedFragment != null) killedFragment.refresh();
             updateKilledCount();
+            startRetryCount.remove(d.deviceId);
 
             for (Device device : devices) {
                 if (device.mac != null && device.mac.equals(d.mac)) {
@@ -564,6 +603,9 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("⏹ Stopping " + d.ip + "...");
         btnStop.setEnabled(false);
         btnScan.setEnabled(false);
+
+        // Remove retry count when manually stopping
+        startRetryCount.remove(sessionKey);
 
         new Thread(() -> {
             try {
@@ -602,7 +644,6 @@ public class MainActivity extends AppCompatActivity {
 
                 try { arpThread.join(1000); } catch (InterruptedException ignored) {}
 
-                // Remove from killed list only when explicitly unkilling
                 mainHandler.post(() -> {
                     killedManager.removeKilledDevice(d);
                     if (killedFragment != null) killedFragment.refresh();
@@ -654,6 +695,7 @@ public class MainActivity extends AppCompatActivity {
             btnStop.setEnabled(false);
             btnScan.setEnabled(true);
             isStopping = false;
+            startRetryCount.remove(sessionKey);
             Toast.makeText(MainActivity.this,
                     "✅ Internet restored for " + d.ip,
                     Toast.LENGTH_SHORT).show();
@@ -677,32 +719,31 @@ public class MainActivity extends AppCompatActivity {
         btnScan.setEnabled(false);
 
         new Thread(() -> {
-            for (DeviceSession session : sessionsByDeviceId.values()) {
-                if (session.running && session.runner != null) {
+            List<String> sessionKeys = new ArrayList<>(sessionsByDeviceId.keySet());
+
+            for (String sessionKey : sessionKeys) {
+                DeviceSession session = sessionsByDeviceId.get(sessionKey);
+                if (session != null && session.running && session.runner != null) {
                     try {
                         session.runner.stop();
                         session.running = false;
                         session.pid = -1;
                         session.device.isCut = false;
                         arpRestore.flushAndRestoreFast(session.sessionKey);
-                        // Don't remove from killed list here - keep them saved
-                        // killedManager.removeKilledDevice(session.device);
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
                         try {
                             session.runner.emergencyStop();
                             session.runner.destroy();
                             arpRestore.flushAndRestoreFast(session.sessionKey);
-                            // Don't remove from killed list here
-                            // killedManager.removeKilledDevice(session.device);
                         } catch (Exception ignored) {}
                     }
                 }
             }
 
-            sessionsByDeviceId.clear();
-
             mainHandler.post(() -> {
+                sessionsByDeviceId.clear();
+                startRetryCount.clear();
                 if (killedFragment != null) killedFragment.refresh();
                 updateKilledCount();
                 adapter.notifyDataSetChanged();
@@ -723,14 +764,12 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // If there are active sessions, ask user if they want to stop them
         if (!sessionsByDeviceId.isEmpty()) {
             new AlertDialog.Builder(this)
                     .setTitle("🔄 Active Sessions Found")
                     .setMessage("There are active sessions running. Do you want to stop them and restore ARP?")
                     .setPositiveButton("Yes, Stop All", (d, w) -> {
                         stopAllSessions();
-                        // After stopping, restore ARP
                         mainHandler.postDelayed(() -> {
                             if (sessionsByDeviceId.isEmpty()) {
                                 doRestoreAllArp();
@@ -756,15 +795,12 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             boolean allSuccess = true;
+            List<String> sessionKeys = new ArrayList<>(sessionsByDeviceId.keySet());
 
-            // If there are no sessions, just restore ARP for gateway
-            if (sessionsByDeviceId.isEmpty()) {
+            if (sessionKeys.isEmpty()) {
                 try {
-                    // Try to restore using current gateway
                     String currentGateway = NetUtils.getGatewayIp(MainActivity.this);
                     if (currentGateway != null && !currentGateway.isEmpty()) {
-                        // We need to capture a fresh snapshot first
-                        // Use a dummy session key for restoration
                         String tempKey = "temp_restore_" + System.currentTimeMillis();
                         arpRestore.captureTrustedSnapshot(MainActivity.this, tempKey, null, null);
                         boolean result = arpRestore.flushAndRestoreFast(tempKey);
@@ -776,8 +812,7 @@ public class MainActivity extends AppCompatActivity {
                     allSuccess = false;
                 }
             } else {
-                // Restore ARP for all active sessions
-                for (String sessionKey : sessionsByDeviceId.keySet()) {
+                for (String sessionKey : sessionKeys) {
                     try {
                         if (!arpRestore.flushAndRestoreFast(sessionKey)) {
                             allSuccess = false;
