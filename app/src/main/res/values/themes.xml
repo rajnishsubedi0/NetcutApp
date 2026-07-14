@@ -1,28 +1,9 @@
-<resources>
-    <!-- Light Theme -->
-    <style name="Theme.NetCut" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#2196F3</item>
-        <item name="colorPrimaryVariant">#1976D2</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#FFC107</item>
-        <item name="colorSecondaryVariant">#FFA000</item>
-        <item name="colorOnSecondary">#000000</item>
-
-        <!-- Background colors -->
-        <item name="android:windowBackground">#F5F5F5</item>
-        <item name="android:colorBackground">#F5F5F5</item>
-
-        <!-- Status bar -->
-        <item name="android:statusBarColor">#FFFFFF</item>
-        <item name="android:windowLightStatusBar">true</item>
-
-        <!-- Text colors -->
-        <item name="android:textColorPrimary">#212121</item>
-        <item name="android:textColorSecondary">#757575</item>
-
-        <!-- Card colors -->
-        <item name="cardBackgroundColor">#FFFFFF</item>
-        <item name="cardElevation">2dp</item>
-        <item name="cardCornerRadius">8dp</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.Ncapp" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your light theme here. -->
+        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
     </style>
+
+    <style name="Theme.Ncapp" parent="Base.Theme.Ncapp" />
 </resources>

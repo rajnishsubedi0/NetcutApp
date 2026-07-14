@@ -8,7 +8,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ListView;
@@ -18,7 +17,6 @@ import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -26,9 +24,10 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.FragmentManager;
 
-import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
-import com.google.android.material.textfield.TextInputEditText;
 
+import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvGateway, tvIface, tvStatus, tvKilledCount;
     private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
     private ListView lvDevices;
+
 
     private final List<Device> devices = new CopyOnWriteArrayList<>();
     private DeviceAdapter adapter;
@@ -66,18 +66,13 @@ public class MainActivity extends AppCompatActivity {
     private final AtomicBoolean isStopping = new AtomicBoolean(false);
     private boolean showingKilled = false;
     private boolean autoScanDone = false;
-    private boolean isDarkTheme = true;
+
 
     private final Map<String, DeviceSession> sessionsByDeviceId = new ConcurrentHashMap<>();
     private final Map<String, Integer> startRetryCount = new ConcurrentHashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Load saved theme preference
-        isDarkTheme = getSharedPreferences("app_prefs", MODE_PRIVATE)
-                .getBoolean("dark_theme", true);
-        applyTheme(isDarkTheme);
-
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
@@ -124,26 +119,11 @@ public class MainActivity extends AppCompatActivity {
                 Log.e(TAG, "Initialization failed", e);
                 runOnUi(() -> {
                     tvStatus.setText("Initialization failed");
-                    Toast.makeText(MainActivity.this, "Init failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Init failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             }
         }).start();
     }
-
-    private void applyTheme(boolean dark) {
-        if (dark) {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
-        } else {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
-        }
-        getSharedPreferences("app_prefs", MODE_PRIVATE)
-                .edit()
-                .putBoolean("dark_theme", dark)
-                .apply();
-    }
-
-
-
     private void showRootDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("Root Required")
@@ -160,7 +140,6 @@ public class MainActivity extends AppCompatActivity {
                 .setNegativeButton("Continue", null)
                 .show();
     }
-
     @Override
     protected void onDestroy() {
         stopAllSessions();
@@ -178,12 +157,10 @@ public class MainActivity extends AppCompatActivity {
         btnRestoreArp = findViewById(R.id.btnRestoreArp);
         btnShowKilled = findViewById(R.id.btnShowKilled);
         btnShowDevices = findViewById(R.id.btnShowDevices);
-
         lvDevices = findViewById(R.id.lvDevices);
 
 
-
-        adapter = new DeviceAdapter(this, devices);
+        adapter = new DeviceAdapter(MainActivity.this, devices);
         lvDevices.setAdapter(adapter);
 
         btnStop.setEnabled(false);
@@ -192,143 +169,7 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("Ready");
     }
 
-    private void setupClickListeners() {
-        btnScan.setOnClickListener(v -> startScan());
-        btnStop.setOnClickListener(v -> stopAllSessions());
-        btnRestoreArp.setOnClickListener(v -> restoreAllArp());
-        btnShowKilled.setOnClickListener(v -> showKilledDevices());
-        btnShowDevices.setOnClickListener(v -> showDevices());
 
-
-        lvDevices.setOnItemClickListener((parent, view, position, id) -> {
-            if (position >= 0 && position < devices.size()) {
-                Device d = devices.get(position);
-
-                if (d.isGateway) {
-                    Toast.makeText(MainActivity.this, "Cannot target gateway", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                if (!isRootAvailable) {
-                    Toast.makeText(MainActivity.this, "Root access required", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                showCustomDeviceDialog(d);
-            }
-        });
-    }
-
-    private void showCustomDeviceDialog(Device d) {
-        DeviceSession session = sessionsByDeviceId.get(d.deviceId);
-        boolean isRunning = session != null && session.running;
-        boolean isKilled = killedManager != null && killedManager.isDeviceKilled(d);
-
-        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_device_action, null);
-
-        TextView dialogIp = dialogView.findViewById(R.id.dialogIp);
-        TextView dialogMac = dialogView.findViewById(R.id.dialogMac);
-        TextView dialogVendor = dialogView.findViewById(R.id.dialogVendor);
-        TextView dialogStatus = dialogView.findViewById(R.id.dialogStatus);
-        TextView dialogCustomName = dialogView.findViewById(R.id.dialogCustomName);
-        Button actionButton = dialogView.findViewById(R.id.dialogActionButton);
-        Button setNameButton = dialogView.findViewById(R.id.dialogSetNameButton);
-        Button cancelButton = dialogView.findViewById(R.id.dialogCancelButton);
-
-        dialogIp.setText(d.ip);
-        dialogMac.setText("MAC: " + d.mac);
-        dialogVendor.setText("Vendor: " + d.vendor);
-
-        String statusText;
-        int statusColor;
-        if (isRunning) {
-            statusText = "🔴 Cut";
-            statusColor = ContextCompat.getColor(this, R.color.red_500);
-        } else if (isKilled) {
-            statusText = "💀 Killed (saved)";
-            statusColor = ContextCompat.getColor(this, R.color.red_600);
-        } else {
-            statusText = "🟢 Online";
-            statusColor = ContextCompat.getColor(this, R.color.green_500);
-        }
-        dialogStatus.setText("Status: " + statusText);
-        dialogStatus.setTextColor(statusColor);
-
-        if (killedManager != null) {
-            KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
-            if (info != null && info.name != null && !info.name.isEmpty()) {
-                dialogCustomName.setText("📝 " + info.name);
-                dialogCustomName.setVisibility(View.VISIBLE);
-            }
-        }
-
-        if (isRunning) {
-            actionButton.setText("🔄 Unkill Device");
-            actionButton.setBackgroundTintList(ContextCompat.getColorStateList(this, R.color.green_500));
-        } else {
-            actionButton.setText("🔪 Kill Device");
-            actionButton.setBackgroundTintList(ContextCompat.getColorStateList(this, R.color.red_500));
-        }
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setView(dialogView)
-                .setCancelable(true)
-                .create();
-
-        actionButton.setOnClickListener(v -> {
-            if (isRunning) {
-                stopSession(d);
-            } else {
-                startSessionWithRetry(d);
-            }
-            dialog.dismiss();
-        });
-
-        setNameButton.setOnClickListener(v -> {
-            dialog.dismiss();
-            showCustomSetNameDialog(d);
-        });
-
-        cancelButton.setOnClickListener(v -> dialog.dismiss());
-
-        dialog.show();
-    }
-
-    private void showCustomSetNameDialog(Device d) {
-        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_set_name, null);
-
-        TextInputEditText etDeviceName = dialogView.findViewById(R.id.etDeviceName);
-        Button btnSave = dialogView.findViewById(R.id.btnNameSave);
-        Button btnCancel = dialogView.findViewById(R.id.btnNameCancel);
-
-        if (killedManager != null) {
-            KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
-            if (info != null && info.name != null && !info.name.isEmpty()) {
-                etDeviceName.setText(info.name);
-            }
-        }
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setView(dialogView)
-                .setCancelable(true)
-                .create();
-
-        btnSave.setOnClickListener(v -> {
-            String name = etDeviceName.getText().toString().trim();
-            if (!name.isEmpty() && killedManager != null) {
-                killedManager.setDeviceName(d.mac, name);
-                updateKilledCount();
-                if (killedFragment != null) killedFragment.refresh();
-                Toast.makeText(MainActivity.this, "✅ Device name updated to: " + name, Toast.LENGTH_SHORT).show();
-                dialog.dismiss();
-            } else {
-                Toast.makeText(MainActivity.this, "Name cannot be empty", Toast.LENGTH_SHORT).show();
-            }
-        });
-
-        btnCancel.setOnClickListener(v -> dialog.dismiss());
-        dialog.show();
-    }
 
     private void requestPermissions() {
         List<String> permissions = new ArrayList<>();
@@ -357,6 +198,27 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void initializeNetworkInfo() {
+        try {
+            gatewayIp = NetUtils.getGatewayIp(this);
+            tvGateway.setText("🌐 Gateway: " + gatewayIp);
+            tvIface.setText("📶 Iface: " + iface);
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to get network info", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "initializeNetworkInfo failed", e);
+        }
+    }
+
+    private void setupClickListeners() {
+        btnScan.setOnClickListener(v -> startScan());
+        btnStop.setOnClickListener(v -> stopAllSessions());
+        btnRestoreArp.setOnClickListener(v -> restoreAllArp());
+        btnShowKilled.setOnClickListener(v -> showKilledDevices());
+        btnShowDevices.setOnClickListener(v -> showDevices());
+
+
+
+    }
     private void performAutoScan() {
         if (autoScanDone) return;
         autoScanDone = true;
@@ -473,7 +335,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-
     private void runOnUi(Runnable r) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             r.run();
@@ -481,7 +342,6 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(r);
         }
     }
-
     private void restoreKilledSession(Device d) {
         if (d != null && d.mac != null && !d.mac.isEmpty()) {
             Log.d(TAG, "Auto-restoring killed session for: " + d.mac);
@@ -558,6 +418,7 @@ public class MainActivity extends AppCompatActivity {
                             session.pid = -1;
                             d.isCut = false;
 
+                            // Remove from sessions map when stopped
                             sessionsByDeviceId.remove(sessionKey);
 
                             adapter.notifyDataSetChanged();
@@ -595,6 +456,7 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 }, RETRY_DELAY_MS);
                             } else {
+                                // Remove from sessions map on crash
                                 sessionsByDeviceId.remove(sessionKey);
                                 adapter.notifyDataSetChanged();
                                 tvStatus.setText("⚠️ Crashed for " + d.ip);
@@ -656,6 +518,7 @@ public class MainActivity extends AppCompatActivity {
         if (session != null && session.running) {
             stopSession(d);
         } else {
+            // Remove from killed list
             if (killedManager != null) {
                 killedManager.removeKilledDevice(d);
             }
@@ -663,6 +526,7 @@ public class MainActivity extends AppCompatActivity {
             updateKilledCount();
             startRetryCount.remove(d.deviceId);
 
+            // Remove from sessions map if present
             sessionsByDeviceId.remove(d.deviceId);
 
             for (Device device : devices) {
@@ -953,11 +817,35 @@ public class MainActivity extends AppCompatActivity {
                         "Location permission is required to scan WiFi networks.",
                         Toast.LENGTH_LONG).show();
             } else {
+                initializeNetworkInfo();
                 performAutoScan();
             }
         }
     }
+    public void toggleKillDirectly(int position) {
+        if (position < 0 || position >= devices.size()) return;
 
+        Device d = devices.get(position);
+
+        if (d.isGateway) {
+            Toast.makeText(this, "Cannot target gateway", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (!isRootAvailable) {
+            Toast.makeText(this, "Root access required", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        DeviceSession session = sessionsByDeviceId.get(d.deviceId);
+        boolean isRunning = session != null && session.running;
+
+        if (isRunning) {
+            stopSession(d);
+        } else {
+            startSessionWithRetry(d);
+        }
+    }
     @Override
     protected void onResume() {
         super.onResume();
@@ -965,5 +853,4 @@ public class MainActivity extends AppCompatActivity {
         if (killedFragment != null && showingKilled) {
             killedFragment.refresh();
         }
-    }
-}
+    }}

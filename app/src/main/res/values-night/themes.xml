@@ -1,28 +1,7 @@
-<resources>
-    <!-- Dark Theme -->
-    <style name="Theme.NetCut" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#58A6FF</item>
-        <item name="colorPrimaryVariant">#1F6FEB</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#FFC107</item>
-        <item name="colorSecondaryVariant">#FFA000</item>
-        <item name="colorOnSecondary">#000000</item>
-
-        <!-- Background colors -->
-        <item name="android:windowBackground">#0D1117</item>
-        <item name="android:colorBackground">#0D1117</item>
-
-        <!-- Status bar -->
-        <item name="android:statusBarColor">#0D1117</item>
-        <item name="android:windowLightStatusBar">false</item>
-
-        <!-- Text colors -->
-        <item name="android:textColorPrimary">#E8E8E8</item>
-        <item name="android:textColorSecondary">#8B949E</item>
-
-        <!-- Card colors -->
-        <item name="cardBackgroundColor">#161B22</item>
-        <item name="cardElevation">2dp</item>
-        <item name="cardCornerRadius">8dp</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.Ncapp" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your dark theme here. -->
+        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
     </style>
 </resources>

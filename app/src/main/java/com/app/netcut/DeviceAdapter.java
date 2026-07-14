@@ -6,20 +6,24 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.TextView;
+
 
 import androidx.annotation.NonNull;
 
+
 import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
+
 
 import java.util.List;
 
 public class DeviceAdapter extends ArrayAdapter<Device> {
-    private final Context context;
-
+    private final MainActivity context;
+    Button statusBadge;
     public DeviceAdapter(Context ctx, List<Device> list) {
         super(ctx, 0, list);
-        this.context = ctx;
+        this.context = (MainActivity) ctx;
     }
 
     @NonNull
@@ -34,12 +38,19 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         TextView ip = convertView.findViewById(R.id.tvIp);
         TextView mac = convertView.findViewById(R.id.tvMac);
         TextView vendor = convertView.findViewById(R.id.tvVendor);
-        TextView statusBadge = convertView.findViewById(R.id.tvStatusBadge);
+        statusBadge= convertView.findViewById(R.id.tvStatusBadge);
         TextView customName = convertView.findViewById(R.id.tvCustomName);
 
         ip.setText(d.ip);
         mac.setText(d.mac);
         vendor.setText(d.vendor);
+        
+        statusBadge.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                context.toggleKillDirectly(position);
+            }
+        });
 
         // Check if device is in killed list
         KilledDevicesManager manager = KilledDevicesManager.getInstance(context);
