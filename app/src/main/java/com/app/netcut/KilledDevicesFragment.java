@@ -69,7 +69,6 @@ public class KilledDevicesFragment extends Fragment {
                         }
                     })
                     .setNegativeButton("Cancel", null)
-//                    .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                     .show();
         });
 
@@ -109,7 +108,6 @@ public class KilledDevicesFragment extends Fragment {
                     }
                 })
                 .setNegativeButton("Cancel", null)
-//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
     }
 
@@ -140,7 +138,6 @@ public class KilledDevicesFragment extends Fragment {
             }
         });
         builder.setNegativeButton("Cancel", null);
-//        builder.setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK);
         builder.show();
     }
 
@@ -167,12 +164,19 @@ public class KilledDevicesFragment extends Fragment {
                 .setTitle("Device Details")
                 .setMessage(details)
                 .setPositiveButton("Close", null)
-//                .setStyle(AlertDialog.THEME_DEVICE_DEFAULT_DARK)
                 .show();
     }
 
     public void loadKilledDevices() {
-        // This is already on UI thread when called from refresh
+        if (getActivity() == null) return;
+
+        // Ensure manager is initialized
+        if (killedManager == null && getContext() != null) {
+            killedManager = KilledDevicesManager.getInstance(getContext());
+        }
+
+        if (killedManager == null) return;
+
         killedDevices.clear();
         killedDevices.addAll(killedManager.getKilledDevices());
 
@@ -188,11 +192,12 @@ public class KilledDevicesFragment extends Fragment {
             tvCount.setText(killedDevices.size() + " device" + (killedDevices.size() > 1 ? "s" : ""));
         }
 
-        adapter.notifyDataSetChanged();
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
     }
 
     public void refresh() {
-        // This might be called from background threads, so post to UI thread
         if (getActivity() != null) {
             getActivity().runOnUiThread(() -> loadKilledDevices());
         }
@@ -204,7 +209,6 @@ public class KilledDevicesFragment extends Fragment {
         if (getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).unkillDevice(d);
         } else if (killedManager != null) {
-            // Direct removal if not in MainActivity
             killedManager.removeKilledDevice(d);
             loadKilledDevices();
             Toast.makeText(requireContext(), "Device removed from killed list", Toast.LENGTH_SHORT).show();
@@ -213,34 +217,33 @@ public class KilledDevicesFragment extends Fragment {
 
     public void updateDevice(Device device) {
         if (device == null || device.mac == null) return;
+        if (!isAdded() || getContext() == null || getActivity() == null) return;
 
-        // Ensure manager is initialized
         if (killedManager == null) {
-            if (getContext() != null) {
-                killedManager = KilledDevicesManager.getInstance(getContext());
+            killedManager = KilledDevicesManager.getInstance(getContext());
+        }
+        if (killedManager == null) return;
+
+        if (!killedManager.isDeviceKilled(device)) return;
+
+        killedManager.updateDeviceInfo(device.mac, device.ip, device.vendor, null);
+
+        for (int i = 0; i < killedDevices.size(); i++) {
+            Device d = killedDevices.get(i);
+            if (d.mac != null && d.mac.equals(device.mac)) {
+                d.ip = device.ip;
+                d.vendor = device.vendor;
+                break;
             }
-            if (killedManager == null) return;
         }
 
-        if (killedManager.isDeviceKilled(device)) {
-            killedManager.updateDeviceInfo(device.mac, device.ip, device.vendor, null);
-
-            for (int i = 0; i < killedDevices.size(); i++) {
-                Device d = killedDevices.get(i);
-                if (d.mac != null && d.mac.equals(device.mac)) {
-                    d.ip = device.ip;
-                    d.vendor = device.vendor;
-                    break;
-                }
-            }
-            if (adapter != null) adapter.notifyDataSetChanged();
+        if (adapter != null) {
+            requireActivity().runOnUiThread(() -> adapter.notifyDataSetChanged());
         }
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        // Clear references to avoid memory leaks
-        killedManager = null;
     }
 }

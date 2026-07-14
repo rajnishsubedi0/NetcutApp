@@ -20,8 +20,8 @@ public class KilledDevicesManager {
 
     private static KilledDevicesManager instance;
     private final SharedPreferences prefs;
-    private final Map<String, KilledDeviceInfo> killedDevices = new HashMap<>();
-
+    private final Map<String, KilledDeviceInfo> killedDevices = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object syncLock = new Object();
     public static class KilledDeviceInfo {
         public String mac;
         public String ip;
@@ -75,33 +75,37 @@ public class KilledDevicesManager {
     }
 
     private void loadKilledDevices() {
-        killedDevices.clear();
-        String json = prefs.getString(KEY_KILLED_DEVICES, "");
-        if (json.isEmpty()) return;
+        synchronized (syncLock) {
+            killedDevices.clear();
+            String json = prefs.getString(KEY_KILLED_DEVICES, "");
+            if (json.isEmpty()) return;
 
-        try {
-            JSONArray array = new JSONArray(json);
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject obj = array.getJSONObject(i);
-                KilledDeviceInfo info = new KilledDeviceInfo(obj);
-                killedDevices.put(info.mac, info);
+            try {
+                JSONArray array = new JSONArray(json);
+                for (int i = 0; i < array.length(); i++) {
+                    JSONObject obj = array.getJSONObject(i);
+                    KilledDeviceInfo info = new KilledDeviceInfo(obj);
+                    killedDevices.put(info.mac, info);
+                }
+                Log.d(TAG, "Loaded " + killedDevices.size() + " killed devices");
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to load killed devices", e);
             }
-            Log.d(TAG, "Loaded " + killedDevices.size() + " killed devices");
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to load killed devices", e);
         }
     }
 
     private void saveKilledDevices() {
-        try {
-            JSONArray array = new JSONArray();
-            for (KilledDeviceInfo info : killedDevices.values()) {
-                array.put(info.toJson());
+        synchronized (syncLock) {
+            try {
+                JSONArray array = new JSONArray();
+                for (KilledDeviceInfo info : new ArrayList<>(killedDevices.values())) {
+                    array.put(info.toJson());
+                }
+                prefs.edit().putString(KEY_KILLED_DEVICES, array.toString()).apply();
+                Log.d(TAG, "Saved " + killedDevices.size() + " killed devices");
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to save killed devices", e);
             }
-            prefs.edit().putString(KEY_KILLED_DEVICES, array.toString()).apply();
-            Log.d(TAG, "Saved " + killedDevices.size() + " killed devices");
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to save killed devices", e);
         }
     }
 
@@ -170,7 +174,7 @@ public class KilledDevicesManager {
 
     public List<Device> getKilledDevices() {
         List<Device> devices = new ArrayList<>();
-        for (KilledDeviceInfo info : killedDevices.values()) {
+        for (KilledDeviceInfo info : new ArrayList<>(killedDevices.values())) {
             Device d = info.toDevice();
             d.isCut = true;
             devices.add(d);

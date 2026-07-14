@@ -29,10 +29,11 @@ import com.app.netcut.KilledDevicesManager.KilledDeviceInfo;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -45,7 +46,8 @@ public class MainActivity extends AppCompatActivity {
     private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
     private ListView lvDevices;
 
-    private final List<Device> devices = new ArrayList<>();
+    // Use CopyOnWriteArrayList for thread-safe iteration
+    private final List<Device> devices = new CopyOnWriteArrayList<>();
     private DeviceAdapter adapter;
     private KilledDevicesFragment killedFragment;
     private KilledDevicesManager killedManager;
@@ -59,14 +61,15 @@ public class MainActivity extends AppCompatActivity {
     private String gatewayIp;
     private String iface;
 
-    private boolean isScanning = false;
+    private final AtomicBoolean isScanning = new AtomicBoolean(false);
     private boolean isRootAvailable = false;
-    private boolean isStopping = false;
+    private final AtomicBoolean isStopping = new AtomicBoolean(false);
     private boolean showingKilled = false;
     private boolean autoScanDone = false;
 
-    private final Map<String, DeviceSession> sessionsByDeviceId = new HashMap<>();
-    private final Map<String, Integer> startRetryCount = new HashMap<>();
+    // Use ConcurrentHashMap for thread safety
+    private final Map<String, DeviceSession> sessionsByDeviceId = new ConcurrentHashMap<>();
+    private final Map<String, Integer> startRetryCount = new ConcurrentHashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -103,7 +106,6 @@ public class MainActivity extends AppCompatActivity {
         setupClickListeners();
         updateKilledCount();
 
-        // Auto-scan after a short delay
         mainHandler.postDelayed(this::performAutoScan, 1500);
     }
 
@@ -197,19 +199,21 @@ public class MainActivity extends AppCompatActivity {
         btnShowDevices.setOnClickListener(v -> showDevices());
 
         lvDevices.setOnItemClickListener((parent, view, position, id) -> {
-            Device d = devices.get(position);
+            if (position >= 0 && position < devices.size()) {
+                Device d = devices.get(position);
 
-            if (d.isGateway) {
-                Toast.makeText(this, "Cannot target gateway", Toast.LENGTH_SHORT).show();
-                return;
+                if (d.isGateway) {
+                    Toast.makeText(this, "Cannot target gateway", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                if (!isRootAvailable) {
+                    Toast.makeText(this, "Root access required", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                showDeviceDialog(d);
             }
-
-            if (!isRootAvailable) {
-                Toast.makeText(this, "Root access required", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            showDeviceDialog(d);
         });
     }
 
@@ -217,7 +221,7 @@ public class MainActivity extends AppCompatActivity {
         if (autoScanDone) return;
         autoScanDone = true;
 
-        if (isRootAvailable && !isScanning && devices.isEmpty()) {
+        if (isRootAvailable && !isScanning.get() && devices.isEmpty()) {
             Log.d(TAG, "Performing auto-scan...");
             Toast.makeText(this, "Auto-scanning network...", Toast.LENGTH_SHORT).show();
             startScan();
@@ -231,16 +235,18 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("📋 Killed Devices (" + killedManager.getCount() + ")");
 
         FragmentManager fm = getSupportFragmentManager();
-        FragmentTransaction ft = fm.beginTransaction();
-        ft.replace(R.id.fragment_container, killedFragment);
-        ft.commit();
+        fm.beginTransaction()
+                .replace(R.id.fragment_container, killedFragment)
+                .commitAllowingStateLoss();
 
         lvDevices.setVisibility(View.GONE);
         findViewById(R.id.fragment_container).setVisibility(View.VISIBLE);
 
-        if (killedFragment != null) {
-            killedFragment.refresh();
-        }
+        mainHandler.post(() -> {
+            if (killedFragment != null && killedFragment.isAdded()) {
+                killedFragment.refresh();
+            }
+        });
     }
 
     private void showDevices() {
@@ -250,9 +256,9 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("📱 Devices (" + devices.size() + ")");
 
         FragmentManager fm = getSupportFragmentManager();
-        FragmentTransaction ft = fm.beginTransaction();
-        ft.remove(killedFragment);
-        ft.commit();
+        if (killedFragment.isAdded()) {
+            fm.beginTransaction().remove(killedFragment).commitAllowingStateLoss();
+        }
 
         lvDevices.setVisibility(View.VISIBLE);
         findViewById(R.id.fragment_container).setVisibility(View.GONE);
@@ -260,8 +266,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateKilledCount() {
-        mainHandler.post(() -> {
-            if (tvKilledCount != null) {
+        runOnUi(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvKilledCount != null && killedManager != null) {
                 int count = killedManager.getCount();
                 tvKilledCount.setText("⚡ " + count);
                 if (count > 0 && !showingKilled) {
@@ -275,14 +282,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startScan() {
-        if (isScanning) {
+        if (isScanning.getAndSet(true)) {
             Toast.makeText(this, "Scan already running", Toast.LENGTH_SHORT).show();
             return;
         }
 
         devices.clear();
         adapter.notifyDataSetChanged();
-        isScanning = true;
         btnScan.setEnabled(false);
         btnScan.setText("⏳ Scanning...");
         tvStatus.setText("📡 Scanning network...");
@@ -306,7 +312,7 @@ public class MainActivity extends AppCompatActivity {
 
                     for (Device d : devices) {
                         DeviceSession s = sessionsByDeviceId.get(d.deviceId);
-                        boolean wasKilled = killedManager.isDeviceKilled(d);
+                        boolean wasKilled = killedManager != null && killedManager.isDeviceKilled(d);
 
                         if (wasKilled && (s == null || !s.running)) {
                             d.isCut = true;
@@ -318,14 +324,12 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    if (killedFragment != null) {
-                        for (Device d : found) {
-                            killedFragment.updateDevice(d);
-                        }
+                    if (killedFragment != null && killedFragment.isAdded() && showingKilled) {
+                        killedFragment.refresh();
                     }
 
                     adapter.notifyDataSetChanged();
-                    isScanning = false;
+                    isScanning.set(false);
                     btnScan.setEnabled(true);
                     btnScan.setText("🔍 Scan");
                     tvStatus.setText("✅ Found " + found.size() + " devices. Tap to kill.");
@@ -334,7 +338,13 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-
+    private void runOnUi(Runnable r) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            r.run();
+        } else {
+            mainHandler.post(r);
+        }
+    }
     private void restoreKilledSession(Device d) {
         if (d != null && d.mac != null && !d.mac.isEmpty()) {
             Log.d(TAG, "Auto-restoring killed session for: " + d.mac);
@@ -364,7 +374,7 @@ public class MainActivity extends AppCompatActivity {
     private void showDeviceDialog(Device d) {
         DeviceSession session = sessionsByDeviceId.get(d.deviceId);
         boolean isRunning = session != null && session.running;
-        boolean isKilled = killedManager.isDeviceKilled(d);
+        boolean isKilled = killedManager != null && killedManager.isDeviceKilled(d);
 
         String title = isRunning ? "⚡ Manage Target" : "🎯 Target Device";
         String action = isRunning ? "🔄 Unkill" : "🔪 Kill";
@@ -374,7 +384,7 @@ public class MainActivity extends AppCompatActivity {
                 "\n🏷️ Vendor: " + d.vendor +
                 "\n📊 State: " + (isRunning ? "🔴 Cut" : (isKilled ? "💀 Killed (saved)" : "🟢 Online"));
 
-        if (isKilled) {
+        if (isKilled && killedManager != null) {
             KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
             if (info != null && info.name != null && !info.name.isEmpty()) {
                 msg += "\n✏️ Name: " + info.name;
@@ -404,15 +414,17 @@ public class MainActivity extends AppCompatActivity {
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
         input.setHint("Enter device name");
 
-        KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
-        if (info != null && info.name != null && !info.name.isEmpty()) {
-            input.setText(info.name);
+        if (killedManager != null) {
+            KilledDeviceInfo info = killedManager.getDeviceInfo(d.mac);
+            if (info != null && info.name != null && !info.name.isEmpty()) {
+                input.setText(info.name);
+            }
         }
 
         builder.setView(input);
         builder.setPositiveButton("Save", (dialog, which) -> {
             String name = input.getText().toString().trim();
-            if (!name.isEmpty()) {
+            if (!name.isEmpty() && killedManager != null) {
                 killedManager.setDeviceName(d.mac, name);
                 updateKilledCount();
                 if (killedFragment != null) killedFragment.refresh();
@@ -449,10 +461,11 @@ public class MainActivity extends AppCompatActivity {
                             session.stopping = false;
                             d.isCut = true;
 
-                            // Reset retry count on successful start
                             startRetryCount.remove(sessionKey);
 
-                            killedManager.addKilledDevice(d);
+                            if (killedManager != null) {
+                                killedManager.addKilledDevice(d);
+                            }
                             if (killedFragment != null) killedFragment.refresh();
                             updateKilledCount();
 
@@ -474,11 +487,14 @@ public class MainActivity extends AppCompatActivity {
                             session.pid = -1;
                             d.isCut = false;
 
+                            // Remove from sessions map when stopped
+                            sessionsByDeviceId.remove(sessionKey);
+
                             adapter.notifyDataSetChanged();
                             tvStatus.setText("🟢 Stopped for " + d.ip);
                             btnStop.setEnabled(false);
                             btnScan.setEnabled(true);
-                            isStopping = false;
+                            isStopping.set(false);
                             updateKilledCount();
                             Toast.makeText(MainActivity.this,
                                     "✅ Internet restored for " + d.ip,
@@ -494,8 +510,8 @@ public class MainActivity extends AppCompatActivity {
                             session.pid = -1;
                             d.isCut = true;
 
-                            // Check if we should retry
                             int retryCount = startRetryCount.getOrDefault(sessionKey, 0);
+
                             if (retryCount < MAX_START_RETRIES &&
                                     (reason == null || !reason.contains("user stopped"))) {
                                 Log.d(TAG, "Session crashed, scheduling retry " + (retryCount + 1) +
@@ -504,16 +520,18 @@ public class MainActivity extends AppCompatActivity {
                                         MAX_START_RETRIES + ")");
 
                                 mainHandler.postDelayed(() -> {
-                                    if (!session.stopping && !isStopping) {
+                                    if (!session.stopping && !isStopping.get()) {
                                         startSessionWithRetry(d);
                                     }
                                 }, RETRY_DELAY_MS);
                             } else {
+                                // Remove from sessions map on crash
+                                sessionsByDeviceId.remove(sessionKey);
                                 adapter.notifyDataSetChanged();
                                 tvStatus.setText("⚠️ Crashed for " + d.ip);
                                 btnStop.setEnabled(false);
                                 btnScan.setEnabled(true);
-                                isStopping = false;
+                                isStopping.set(false);
                                 Toast.makeText(MainActivity.this,
                                         "⚠️ Session crashed: " + d.ip,
                                         Toast.LENGTH_SHORT).show();
@@ -545,7 +563,9 @@ public class MainActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     sessionsByDeviceId.remove(sessionKey);
                     d.isCut = false;
-                    killedManager.removeKilledDevice(d);
+                    if (killedManager != null) {
+                        killedManager.removeKilledDevice(d);
+                    }
                     adapter.notifyDataSetChanged();
                     tvStatus.setText("❌ Failed to start for " + d.ip);
                     btnScan.setEnabled(true);
@@ -567,10 +587,16 @@ public class MainActivity extends AppCompatActivity {
         if (session != null && session.running) {
             stopSession(d);
         } else {
-            killedManager.removeKilledDevice(d);
+            // Remove from killed list
+            if (killedManager != null) {
+                killedManager.removeKilledDevice(d);
+            }
             if (killedFragment != null) killedFragment.refresh();
             updateKilledCount();
             startRetryCount.remove(d.deviceId);
+
+            // Remove from sessions map if present
+            sessionsByDeviceId.remove(d.deviceId);
 
             for (Device device : devices) {
                 if (device.mac != null && device.mac.equals(d.mac)) {
@@ -593,18 +619,17 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        if (isStopping) {
+        if (isStopping.get()) {
             Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        isStopping = true;
+        isStopping.set(true);
         session.stopping = true;
         tvStatus.setText("⏹ Stopping " + d.ip + "...");
         btnStop.setEnabled(false);
         btnScan.setEnabled(false);
 
-        // Remove retry count when manually stopping
         startRetryCount.remove(sessionKey);
 
         new Thread(() -> {
@@ -645,7 +670,9 @@ public class MainActivity extends AppCompatActivity {
                 try { arpThread.join(1000); } catch (InterruptedException ignored) {}
 
                 mainHandler.post(() -> {
-                    killedManager.removeKilledDevice(d);
+                    if (killedManager != null) {
+                        killedManager.removeKilledDevice(d);
+                    }
                     if (killedFragment != null) killedFragment.refresh();
                     updateKilledCount();
                 });
@@ -660,7 +687,7 @@ public class MainActivity extends AppCompatActivity {
                     tvStatus.setText("✅ Internet restored for " + d.ip);
                     btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
-                    isStopping = false;
+                    isStopping.set(false);
                     Toast.makeText(MainActivity.this,
                             "✅ Internet restored for " + d.ip,
                             Toast.LENGTH_SHORT).show();
@@ -681,7 +708,9 @@ public class MainActivity extends AppCompatActivity {
             }
             arpRestore.flushAndRestoreFast(sessionKey);
             mainHandler.post(() -> {
-                killedManager.removeKilledDevice(d);
+                if (killedManager != null) {
+                    killedManager.removeKilledDevice(d);
+                }
                 if (killedFragment != null) killedFragment.refresh();
                 updateKilledCount();
             });
@@ -694,7 +723,7 @@ public class MainActivity extends AppCompatActivity {
             tvStatus.setText("🔄 Emergency stopped " + d.ip);
             btnStop.setEnabled(false);
             btnScan.setEnabled(true);
-            isStopping = false;
+            isStopping.set(false);
             startRetryCount.remove(sessionKey);
             Toast.makeText(MainActivity.this,
                     "✅ Internet restored for " + d.ip,
@@ -704,53 +733,67 @@ public class MainActivity extends AppCompatActivity {
 
     private void stopAllSessions() {
         if (sessionsByDeviceId.isEmpty()) {
-            Toast.makeText(this, "No active sessions", Toast.LENGTH_SHORT).show();
+            runOnUi(() -> Toast.makeText(this, "No active sessions", Toast.LENGTH_SHORT).show());
             return;
         }
 
-        if (isStopping) {
-            Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show();
+        if (isStopping.get()) {
+            runOnUi(() -> Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show());
             return;
         }
 
-        isStopping = true;
-        tvStatus.setText("⏹ Stopping all sessions...");
-        btnStop.setEnabled(false);
-        btnScan.setEnabled(false);
+        isStopping.set(true);
+        runOnUi(() -> {
+            tvStatus.setText("⏹ Stopping all sessions...");
+            btnStop.setEnabled(false);
+            btnScan.setEnabled(false);
+        });
 
         new Thread(() -> {
-            List<String> sessionKeys = new ArrayList<>(sessionsByDeviceId.keySet());
+            List<DeviceSession> sessions = new ArrayList<>(sessionsByDeviceId.values());
 
-            for (String sessionKey : sessionKeys) {
-                DeviceSession session = sessionsByDeviceId.get(sessionKey);
-                if (session != null && session.running && session.runner != null) {
-                    try {
+            for (DeviceSession session : sessions) {
+                if (session == null) continue;
+
+                try {
+                    session.stopping = true;
+
+                    if (session.runner != null) {
                         session.runner.stop();
-                        session.running = false;
-                        session.pid = -1;
+                    }
+
+                    session.running = false;
+                    session.pid = -1;
+                    if (session.device != null) {
                         session.device.isCut = false;
-                        arpRestore.flushAndRestoreFast(session.sessionKey);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
-                        try {
+                    }
+
+                    arpRestore.flushAndRestoreFast(session.sessionKey);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
+                    try {
+                        if (session.runner != null) {
                             session.runner.emergencyStop();
                             session.runner.destroy();
-                            arpRestore.flushAndRestoreFast(session.sessionKey);
-                        } catch (Exception ignored) {}
-                    }
+                        }
+                        arpRestore.flushAndRestoreFast(session.sessionKey);
+                    } catch (Exception ignored) {}
                 }
             }
 
-            mainHandler.post(() -> {
-                sessionsByDeviceId.clear();
-                startRetryCount.clear();
-                if (killedFragment != null) killedFragment.refresh();
+            sessionsByDeviceId.clear();
+            startRetryCount.clear();
+
+            runOnUi(() -> {
+                if (killedFragment != null && killedFragment.isAdded() && showingKilled) {
+                    killedFragment.refresh();
+                }
                 updateKilledCount();
                 adapter.notifyDataSetChanged();
                 tvStatus.setText("✅ All sessions stopped (killed list preserved)");
                 btnStop.setEnabled(false);
                 btnScan.setEnabled(true);
-                isStopping = false;
+                isStopping.set(false);
                 Toast.makeText(MainActivity.this,
                         "✅ All sessions stopped. Killed devices preserved.",
                         Toast.LENGTH_SHORT).show();
