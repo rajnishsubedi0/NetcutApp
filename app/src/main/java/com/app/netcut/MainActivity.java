@@ -83,32 +83,63 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
-        startService(new Intent(this, CleanupService.class));
+        initializeViews();
+        setupClickListeners();
 
         killedManager = KilledDevicesManager.getInstance(this);
         killedFragment = new KilledDevicesFragment();
 
-        initializeViews();
+        mainHandler.post(() -> tvStatus.setText("Initializing..."));
 
-        try {
-            new ExtractFile().extractTheFile(this, R.raw.netcut, "netcut");
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        new Thread(() -> {
+            try {
+                startService(new Intent(this, CleanupService.class));
 
-        shellManager = RootShellManager.getInstance();
-        arpRestore = ArpRestore.getInstance();
-        iface = arpRestore.getInterfaceName();
+                new ExtractFile().extractTheFile(this, R.raw.netcut, "netcut");
 
-        checkRootAccess();
-        requestPermissions();
-        initializeNetworkInfo();
-        setupClickListeners();
-        updateKilledCount();
+                shellManager = RootShellManager.getInstance();
+                arpRestore = ArpRestore.getInstance();
+                iface = arpRestore.getInterfaceName();
+                isRootAvailable = shellManager != null && shellManager.hasRootAccess();
+                gatewayIp = NetUtils.getGatewayIp(this);
 
-        mainHandler.postDelayed(this::performAutoScan, 1500);
+                runOnUi(() -> {
+                    tvGateway.setText("🌐 Gateway: " + gatewayIp);
+                    tvIface.setText("📶 Iface: " + iface);
+                    tvStatus.setText("Ready");
+                    updateKilledCount();
+                    requestPermissions();
+                    if (!isRootAvailable) {
+                        showRootDialog();
+                    } else {
+                        mainHandler.postDelayed(this::performAutoScan, 1500);
+                    }
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Initialization failed", e);
+                runOnUi(() -> {
+                    tvStatus.setText("Initialization failed");
+                    Toast.makeText(this, "Init failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
     }
-
+    private void showRootDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Root Required")
+                .setMessage("This app requires root access to function properly.")
+                .setPositiveButton("Check Again", (d, w) -> {
+                    new Thread(() -> {
+                        boolean root = shellManager != null && shellManager.hasRootAccess();
+                        runOnUi(() -> {
+                            isRootAvailable = root;
+                            if (!root) showRootDialog();
+                        });
+                    }).start();
+                })
+                .setNegativeButton("Continue", null)
+                .show();
+    }
     @Override
     protected void onDestroy() {
         stopAllSessions();
@@ -234,19 +265,14 @@ public class MainActivity extends AppCompatActivity {
         btnShowDevices.setVisibility(View.VISIBLE);
         tvStatus.setText("📋 Killed Devices (" + killedManager.getCount() + ")");
 
-        FragmentManager fm = getSupportFragmentManager();
-        fm.beginTransaction()
+        killedFragment = new KilledDevicesFragment();
+
+        getSupportFragmentManager().beginTransaction()
                 .replace(R.id.fragment_container, killedFragment)
                 .commitAllowingStateLoss();
 
         lvDevices.setVisibility(View.GONE);
         findViewById(R.id.fragment_container).setVisibility(View.VISIBLE);
-
-        mainHandler.post(() -> {
-            if (killedFragment != null && killedFragment.isAdded()) {
-                killedFragment.refresh();
-            }
-        });
     }
 
     private void showDevices() {
@@ -733,12 +759,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void stopAllSessions() {
         if (sessionsByDeviceId.isEmpty()) {
-            runOnUi(() -> Toast.makeText(this, "No active sessions", Toast.LENGTH_SHORT).show());
             return;
         }
 
         if (isStopping.get()) {
-            runOnUi(() -> Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show());
             return;
         }
 
@@ -754,20 +778,11 @@ public class MainActivity extends AppCompatActivity {
 
             for (DeviceSession session : sessions) {
                 if (session == null) continue;
-
                 try {
                     session.stopping = true;
-
                     if (session.runner != null) {
                         session.runner.stop();
                     }
-
-                    session.running = false;
-                    session.pid = -1;
-                    if (session.device != null) {
-                        session.device.isCut = false;
-                    }
-
                     arpRestore.flushAndRestoreFast(session.sessionKey);
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to stop session " + session.sessionKey, e);
@@ -776,8 +791,11 @@ public class MainActivity extends AppCompatActivity {
                             session.runner.emergencyStop();
                             session.runner.destroy();
                         }
-                        arpRestore.flushAndRestoreFast(session.sessionKey);
                     } catch (Exception ignored) {}
+                }
+
+                if (session.device != null) {
+                    session.device.isCut = false;
                 }
             }
 
@@ -785,18 +803,15 @@ public class MainActivity extends AppCompatActivity {
             startRetryCount.clear();
 
             runOnUi(() -> {
+                adapter.notifyDataSetChanged();
                 if (killedFragment != null && killedFragment.isAdded() && showingKilled) {
                     killedFragment.refresh();
                 }
                 updateKilledCount();
-                adapter.notifyDataSetChanged();
-                tvStatus.setText("✅ All sessions stopped (killed list preserved)");
+                tvStatus.setText("✅ All sessions stopped");
                 btnStop.setEnabled(false);
                 btnScan.setEnabled(true);
                 isStopping.set(false);
-                Toast.makeText(MainActivity.this,
-                        "✅ All sessions stopped. Killed devices preserved.",
-                        Toast.LENGTH_SHORT).show();
             });
         }).start();
     }

@@ -217,14 +217,12 @@ public class KilledDevicesFragment extends Fragment {
 
     public void updateDevice(Device device) {
         if (device == null || device.mac == null) return;
-        if (!isAdded() || getContext() == null || getActivity() == null) return;
+        if (!isAdded() || getContext() == null) return;
 
         if (killedManager == null) {
             killedManager = KilledDevicesManager.getInstance(getContext());
         }
-        if (killedManager == null) return;
-
-        if (!killedManager.isDeviceKilled(device)) return;
+        if (killedManager == null || !killedManager.isDeviceKilled(device)) return;
 
         killedManager.updateDeviceInfo(device.mac, device.ip, device.vendor, null);
 
@@ -237,8 +235,11 @@ public class KilledDevicesFragment extends Fragment {
             }
         }
 
-        if (adapter != null) {
-            requireActivity().runOnUiThread(() -> adapter.notifyDataSetChanged());
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (!isAdded() || getView() == null || adapter == null) return;
+                adapter.notifyDataSetChanged();
+            });
         }
     }
 

@@ -29,8 +29,8 @@ public class ArpRestore {
     private String interfaceName = "wlan0";
     private final RootShellManager shellManager;
 
-    private long lastRestoreTime = 0;
-    private boolean lastRestoreSuccess = false;
+    private final Map<String, Long> lastRestoreTimes = new HashMap<>();
+    private final Map<String, Boolean> lastRestoreResults = new HashMap<>();
 
     private static class Snapshot {
         Map<String, String> arpCache = new HashMap<>();
@@ -153,25 +153,52 @@ public class ArpRestore {
 
     public boolean flushAndRestoreFast(String sessionKey) {
         long now = System.currentTimeMillis();
-        if (now - lastRestoreTime < SHORT_CIRCUIT_MS) {
-            return lastRestoreSuccess;
+
+        synchronized (lock) {
+            Long lastTime = lastRestoreTimes.get(sessionKey);
+            Boolean lastResult = lastRestoreResults.get(sessionKey);
+            if (lastTime != null && (now - lastTime) < SHORT_CIRCUIT_MS) {
+                return lastResult != null && lastResult;
+            }
         }
 
         boolean locked = false;
+        boolean success = false;
+
         try {
             locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
-            if (!locked) return false;
-            if (!isRestoring.compareAndSet(false, true)) return false;
+            if (!locked) {
+                synchronized (lock) {
+                    lastRestoreTimes.put(sessionKey, now);
+                    lastRestoreResults.put(sessionKey, false);
+                }
+                return false;
+            }
+
+            if (!isRestoring.compareAndSet(false, true)) {
+                synchronized (lock) {
+                    lastRestoreTimes.put(sessionKey, now);
+                    lastRestoreResults.put(sessionKey, false);
+                }
+                return false;
+            }
 
             Snapshot s;
             synchronized (lock) {
                 s = snapshots.get(sessionKey);
-                if (s == null) {
-                    // If no snapshot, try a generic restore for the gateway
-                    Log.w(TAG, "No snapshot for " + sessionKey + ", trying generic restore");
-                    return genericRestore();
+                if (s != null) {
+                    s = copySnapshot(s);
                 }
-                s = copySnapshot(s);
+            }
+
+            if (s == null) {
+                Log.w(TAG, "No snapshot for " + sessionKey + ", trying generic restore");
+                success = genericRestore();
+                synchronized (lock) {
+                    lastRestoreTimes.put(sessionKey, now);
+                    lastRestoreResults.put(sessionKey, success);
+                }
+                return success;
             }
 
             String gatewayIp = s.gatewayIp;
@@ -182,35 +209,48 @@ public class ArpRestore {
             }
 
             if (gatewayIp == null || gatewayIp.isEmpty()) {
-                lastRestoreSuccess = false;
-                lastRestoreTime = now;
+                synchronized (lock) {
+                    lastRestoreTimes.put(sessionKey, now);
+                    lastRestoreResults.put(sessionKey, false);
+                }
                 return false;
             }
 
-            // Only delete and restore the specific target IP and gateway
-            // This ensures other sessions are not affected
+            // Restore target entry if available
             if (s.targetIp != null && !s.targetIp.isEmpty()) {
-                shellManager.executeCommandBool("ip neigh del " + shQ(s.targetIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
+                String targetDev = s.arpDevices.get(s.targetIp);
+                if (targetDev == null || targetDev.isEmpty()) {
+                    targetDev = interfaceName;
+                }
+
+                shellManager.executeCommandBool(
+                        "ip neigh del " + shQ(s.targetIp) +
+                                " dev " + shQ(targetDev) +
+                                " 2>/dev/null || true"
+                );
 
                 if (s.targetMac != null && !s.targetMac.isEmpty()) {
-                    String dev = s.arpDevices.get(s.targetIp);
-                    if (dev == null || dev.isEmpty()) dev = interfaceName;
-
                     shellManager.executeCommandBool(
                             "ip neigh replace " + shQ(s.targetIp) +
                                     " lladdr " + shQ(s.targetMac) +
-                                    " dev " + shQ(dev) +
+                                    " dev " + shQ(targetDev) +
                                     " nud reachable 2>/dev/null"
                     );
                 }
             }
 
-            // Always restore gateway if we have a valid MAC
+            // Restore gateway entry if available
             if (gatewayMac != null && !gatewayMac.isEmpty()) {
-                shellManager.executeCommandBool("ip neigh del " + shQ(gatewayIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
-
                 String gwDev = s.arpDevices.get(gatewayIp);
-                if (gwDev == null || gwDev.isEmpty()) gwDev = interfaceName;
+                if (gwDev == null || gwDev.isEmpty()) {
+                    gwDev = interfaceName;
+                }
+
+                shellManager.executeCommandBool(
+                        "ip neigh del " + shQ(gatewayIp) +
+                                " dev " + shQ(gwDev) +
+                                " 2>/dev/null || true"
+                );
 
                 shellManager.executeCommandBool(
                         "ip neigh replace " + shQ(gatewayIp) +
@@ -220,20 +260,33 @@ public class ArpRestore {
                 );
             }
 
-            shellManager.executeCommandBool("ping -c1 -W1 " + shQ(gatewayIp) + " >/dev/null 2>&1 || true");
+            shellManager.executeCommandBool(
+                    "ping -c1 -W1 " + shQ(gatewayIp) + " >/dev/null 2>&1 || true"
+            );
 
-            lastRestoreSuccess = true;
-            lastRestoreTime = now;
+            success = true;
+
+            synchronized (lock) {
+                lastRestoreTimes.put(sessionKey, now);
+                lastRestoreResults.put(sessionKey, true);
+            }
+
             return true;
 
         } catch (Exception e) {
             Log.e(TAG, "flushAndRestoreFast failed for " + sessionKey, e);
-            lastRestoreSuccess = false;
+            synchronized (lock) {
+                lastRestoreTimes.put(sessionKey, now);
+                lastRestoreResults.put(sessionKey, false);
+            }
             return false;
         } finally {
             isRestoring.set(false);
             if (locked) {
-                try { restoreLock.unlock(); } catch (Exception ignored) {}
+                try {
+                    restoreLock.unlock();
+                } catch (Exception ignored) {
+                }
             }
         }
     }
