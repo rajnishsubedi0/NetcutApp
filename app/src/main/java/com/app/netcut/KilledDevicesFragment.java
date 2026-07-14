@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class KilledDevicesFragment extends Fragment {
-    private static final String TAG = "KilledDevicesFragment";
 
     private ListView lvKilledDevices;
     private TextView tvEmptyState, tvCount;
@@ -215,33 +214,6 @@ public class KilledDevicesFragment extends Fragment {
         }
     }
 
-    public void updateDevice(Device device) {
-        if (device == null || device.mac == null) return;
-        if (!isAdded() || getContext() == null) return;
-
-        if (killedManager == null) {
-            killedManager = KilledDevicesManager.getInstance(getContext());
-        }
-        if (killedManager == null || !killedManager.isDeviceKilled(device)) return;
-
-        killedManager.updateDeviceInfo(device.mac, device.ip, device.vendor, null);
-
-        for (int i = 0; i < killedDevices.size(); i++) {
-            Device d = killedDevices.get(i);
-            if (d.mac != null && d.mac.equals(device.mac)) {
-                d.ip = device.ip;
-                d.vendor = device.vendor;
-                break;
-            }
-        }
-
-        if (getActivity() != null) {
-            getActivity().runOnUiThread(() -> {
-                if (!isAdded() || getView() == null || adapter == null) return;
-                adapter.notifyDataSetChanged();
-            });
-        }
-    }
 
     @Override
     public void onDestroyView() {

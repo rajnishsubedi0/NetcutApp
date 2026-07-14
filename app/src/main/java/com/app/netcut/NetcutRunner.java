@@ -191,14 +191,6 @@ public class NetcutRunner implements Closeable {
         } catch (Exception ignored) {}
     }
 
-    public boolean isRunning() {
-        return running.get();
-    }
-
-    public int getPid() {
-        return netcutPid;
-    }
-
     private void startLogTail() {
         tailFuture = ioExecutor.submit(() -> {
             long pos = 0;

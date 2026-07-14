@@ -67,25 +67,6 @@ public class RootShellManager {
         }
     }
 
-    /**
-     * Execute a command and return its combined stdout as a single string.
-     * Returns "" (not null) when the command succeeds but produces no output.
-     * Returns null only when the shell itself is unavailable or an exception occurs.
-     */
-    public String executeCommand(String command) {
-        if (!isShellAvailable()) {
-            Log.w(TAG, "Root shell not available");
-            return null;
-        }
-        try {
-            Shell.Result result = Shell.cmd(command).exec();
-            return String.join("\n", result.getOut()); // may be ""
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to execute command: " + command, e);
-            return null;
-        }
-    }
-
     public List<String> executeCommandLines(String command) {
         if (!isShellAvailable()) {
             Log.w(TAG, "Root shell not available");
@@ -106,18 +87,6 @@ public class RootShellManager {
         }
     }
 
-    public int executeCommandWithCode(String command) {
-        if (!isShellAvailable()) {
-            Log.w(TAG, "Root shell not available");
-            return -1;
-        }
-        try {
-            return Shell.cmd(command).exec().getCode();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to execute command: " + command, e);
-            return -1;
-        }
-    }
 
     public boolean executeCommandBool(String command) {
         if (!isShellAvailable()) {
@@ -148,17 +117,11 @@ public class RootShellManager {
         }
     }
 
-    public String getRootStatus() {
-        if (hasRootAccess()) return "✓ Root access available";
-        if (shell != null && isShellAvailable()) return "⚠ Shell alive but root not available";
-        return "✗ No root access";
-    }
+
 
     public synchronized void close() {
         closeInternal();
-        // NOTE: we intentionally do NOT set instance = null here.
-        // Other components may still hold a reference; nulling the singleton
-        // would cause NPEs. Use resetInstance() if you truly want to discard it.
+
     }
 
     private void closeInternal() {

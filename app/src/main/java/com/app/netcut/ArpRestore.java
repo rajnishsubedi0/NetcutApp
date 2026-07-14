@@ -163,7 +163,7 @@ public class ArpRestore {
         }
 
         boolean locked = false;
-        boolean success = false;
+        boolean success;
 
         try {
             locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
@@ -263,8 +263,6 @@ public class ArpRestore {
             shellManager.executeCommandBool(
                     "ping -c1 -W1 " + shQ(gatewayIp) + " >/dev/null 2>&1 || true"
             );
-
-            success = true;
 
             synchronized (lock) {
                 lastRestoreTimes.put(sessionKey, now);

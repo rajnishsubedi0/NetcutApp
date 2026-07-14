@@ -9,7 +9,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+
 import java.util.List;
 import java.util.Map;
 
@@ -130,35 +130,18 @@ public class KilledDevicesManager {
         Log.d(TAG, "Removed killed device: " + device.mac);
     }
 
-    public void removeKilledDevice(String mac) {
-        if (mac == null || mac.isEmpty()) return;
-        killedDevices.remove(mac);
-        saveKilledDevices();
-        Log.d(TAG, "Removed killed device: " + mac);
-    }
 
     public boolean isDeviceKilled(Device device) {
         if (device == null || device.mac == null || device.mac.isEmpty()) return false;
         return killedDevices.containsKey(device.mac);
     }
 
-    public boolean isDeviceKilled(String mac) {
-        return mac != null && killedDevices.containsKey(mac);
-    }
 
     public KilledDeviceInfo getDeviceInfo(String mac) {
         return killedDevices.get(mac);
     }
 
-    public void updateDeviceInfo(String mac, String ip, String vendor, String name) {
-        KilledDeviceInfo info = killedDevices.get(mac);
-        if (info != null) {
-            if (ip != null && !ip.isEmpty()) info.ip = ip;
-            if (vendor != null && !vendor.isEmpty()) info.vendor = vendor;
-            if (name != null && !name.isEmpty()) info.name = name;
-            saveKilledDevices();
-        }
-    }
+
 
     public void setDeviceName(String mac, String name) {
         KilledDeviceInfo info = killedDevices.get(mac);
@@ -168,9 +151,7 @@ public class KilledDevicesManager {
         }
     }
 
-    public List<KilledDeviceInfo> getKilledDevicesList() {
-        return new ArrayList<>(killedDevices.values());
-    }
+
 
     public List<Device> getKilledDevices() {
         List<Device> devices = new ArrayList<>();
