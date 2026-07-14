@@ -41,10 +41,12 @@ dependencies {
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
 
-    // libsu core
+
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
-    // libsu service (optional, for service mode)
+
     implementation("com.github.topjohnwu.libsu:service:6.0.0")
-    // libsu io (optional, for I/O operations)
+
     implementation("com.github.topjohnwu.libsu:io:6.0.0")
+    implementation("androidx.cardview:cardview:1.0.0")
+    implementation("com.google.android.material:material:1.9.0")
 }
