@@ -5,7 +5,7 @@
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/material_dynamic_neutral0"
+    android:background="?attr/backgroundColorWhiteDarkMode"
     tools:context="com.app.MainActivity">
 
     <LinearLayout
@@ -39,11 +39,10 @@
                 android:id="@+id/tvKilledCount"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="#21262D"
                 android:paddingHorizontal="12dp"
                 android:paddingVertical="4dp"
                 android:text="⚡ 0"
-                android:textColor="#58A6FF"
+                android:textColor="?attr/textDefaultColor"
                 android:textSize="14sp" />
         </LinearLayout>
 
@@ -60,15 +59,15 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="🌐 Gateway: Loading..."
-                android:textColor="#8B949E"
+                android:textColor="@color/grey"
                 android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/tvIface"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="📶 Iface: wlan0"
-                android:textColor="#8B949E"
+                android:text="📶 Interface: wlan0"
+                android:textColor="@color/grey"
                 android:textSize="13sp" />
         </LinearLayout>
 
@@ -78,10 +77,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
-            android:background="#161B22"
+            android:background="?attr/bgForLogView"
             android:padding="12dp"
             android:text="Ready"
-            android:textColor="#C9D1D9"
+            android:textColor="?attr/textForLogView"
             android:textSize="14sp" />
 
         <!-- Buttons Row 1 -->
@@ -174,7 +173,7 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:layout_marginTop="4dp"
-            android:divider="#21262D"
+            android:divider="@color/divider_color"
             android:dividerHeight="1dp"
             android:scrollbars="none"
             android:paddingVertical="4dp" />

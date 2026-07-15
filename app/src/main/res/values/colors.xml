@@ -2,4 +2,13 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="grey">#8B949E</color>
+    <color name="light_white">#C9D1D9FF</color>
+    <color name="text_col_default">#FF000000</color>
+    <color name="divider_color">#8B949E</color>
+    <color name="background_color">#FAFAFA</color>
+    <color name="bg_for_log_view">#F1F8F1</color>
+    <color name="text_for_log_view">#377850</color>
+
+
 </resources>

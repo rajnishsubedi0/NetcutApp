@@ -43,8 +43,7 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         TextView vendor = convertView.findViewById(R.id.tvVendor);
         statusBadge= convertView.findViewById(R.id.tvStatusBadge);
         LinearLayout linearLayout=convertView.findViewById(R.id.greenColorId);
-        TextView customName = convertView.findViewById(R.id.tvCustomName);
-        LinearLayout button_bg_layout =convertView.findViewById(R.id.button_bg_layout);
+
 
         ip.setText(d.ip);
         mac.setText(d.mac);
@@ -64,35 +63,23 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         if (d.isGateway) {
             statusBadge.setText("Gateway");
             statusBadge.setTextColor(Color.parseColor("#FFC107"));
-            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_yellow);
-            button_bg_layout.setBackgroundResource(R.drawable.button_bg_yellow);
+            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_yellow);
             ip.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
             statusBadge.setText("Revive");
             statusBadge.setTextColor(Color.parseColor("#4CAF50"));
             ip.setTextColor(Color.parseColor("#F44336"));
-            button_bg_layout.setBackgroundResource(R.drawable.button_bg_green);
-            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_red);
+            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_green);
         } else if (info != null) {
             statusBadge.setText(".....");
             statusBadge.setTextColor(Color.parseColor("#FFBF00"));
             ip.setTextColor(Color.parseColor("#A5C4E8"));
-            button_bg_layout.setBackgroundResource(R.drawable.button_bg_red);
-            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_red);
+            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
         } else {
             statusBadge.setText("Cut");
             statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
             ip.setTextColor(Color.parseColor("#4CAF50"));
-            button_bg_layout.setBackgroundResource(R.drawable.button_bg_red);
-            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_green);
-        }
-
-        // Show custom name if set
-        if (info != null && info.name != null && !info.name.isEmpty()) {
-            customName.setText("✏️ " + info.name);
-            customName.setVisibility(View.VISIBLE);
-        } else {
-            customName.setVisibility(View.GONE);
+            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
         }
 
         return convertView;
