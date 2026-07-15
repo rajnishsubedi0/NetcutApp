@@ -9,6 +9,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -23,6 +25,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.FragmentManager;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +44,8 @@ public class MainActivity extends AppCompatActivity {
     private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
     private ListView lvDevices;
 
-
-    private final List<Device> devices = new CopyOnWriteArrayList<>();
+    // Make devices list static to persist across configuration changes
+    private static final List<Device> devices = new CopyOnWriteArrayList<>();
     private DeviceAdapter adapter;
     private KilledDevicesFragment killedFragment;
     private KilledDevicesManager killedManager;
@@ -62,15 +65,18 @@ public class MainActivity extends AppCompatActivity {
     private boolean showingKilled = false;
     private boolean autoScanDone = false;
 
-
-    private final Map<String, DeviceSession> sessionsByDeviceId = new ConcurrentHashMap<>();
-    private final Map<String, Integer> startRetryCount = new ConcurrentHashMap<>();
+    // Make sessions static to persist across configuration changes
+    private static final Map<String, DeviceSession> sessionsByDeviceId = new ConcurrentHashMap<>();
+    private static final Map<String, Integer> startRetryCount = new ConcurrentHashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
+
+        // Handle status bar appearance
+        handleStatusBar();
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -84,7 +90,32 @@ public class MainActivity extends AppCompatActivity {
         killedManager = KilledDevicesManager.getInstance(this);
         killedFragment = new KilledDevicesFragment();
 
-        mainHandler.post(() -> tvStatus.setText("Initializing..."));
+        // Restore state if available
+        if (savedInstanceState != null) {
+            restoreState(savedInstanceState);
+        }
+
+        // If we already have devices, update the UI
+        if (!devices.isEmpty()) {
+            adapter.notifyDataSetChanged();
+            tvStatus.setText("📱 Devices (" + devices.size() + ")");
+            updateKilledCount();
+
+            // Update each device's running state
+            for (Device d : devices) {
+                DeviceSession s = sessionsByDeviceId.get(d.deviceId);
+                if (s != null && s.running) {
+                    d.isCut = true;
+                }
+            }
+            adapter.notifyDataSetChanged();
+        }
+
+        mainHandler.post(() -> {
+            if (tvStatus != null && tvStatus.getText().toString().equals("Initializing...")) {
+                tvStatus.setText("Ready");
+            }
+        });
 
         new Thread(() -> {
             try {
@@ -96,17 +127,25 @@ public class MainActivity extends AppCompatActivity {
                 arpRestore = ArpRestore.getInstance();
                 iface = arpRestore.getInterfaceName();
                 isRootAvailable = shellManager != null && shellManager.hasRootAccess();
-                gatewayIp = NetUtils.getGatewayIp(this);
+
+                if (gatewayIp == null || gatewayIp.isEmpty()) {
+                    gatewayIp = NetUtils.getGatewayIp(this);
+                }
 
                 runOnUi(() -> {
                     tvGateway.setText("🌐 Gateway: " + gatewayIp);
                     tvIface.setText("📶 Iface: " + iface);
-                    tvStatus.setText("Ready");
+
+                    if (devices.isEmpty()) {
+                        tvStatus.setText("Ready");
+                    }
+
                     updateKilledCount();
                     requestPermissions();
+
                     if (!isRootAvailable) {
                         showRootDialog();
-                    } else {
+                    } else if (devices.isEmpty() && !autoScanDone) {
                         mainHandler.postDelayed(this::performAutoScan, 1500);
                     }
                 });
@@ -119,6 +158,201 @@ public class MainActivity extends AppCompatActivity {
             }
         }).start();
     }
+
+    /**
+     * Handle status bar appearance for both light and dark themes
+     */
+    private void handleStatusBar() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            Window window = getWindow();
+            window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+
+            // Check if it's dark mode
+            int nightModeFlags = getResources().getConfiguration().uiMode &
+                    android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+            boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                // For Android M and above, set status bar icon color based on theme
+                if (isDarkMode) {
+                    // Dark mode: white icons
+                    window.getDecorView().setSystemUiVisibility(
+                            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    );
+                    window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
+                } else {
+                    // Light mode: dark icons
+                    window.getDecorView().setSystemUiVisibility(
+                            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    );
+                    window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
+                }
+            } else {
+                // For older Android versions
+                window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
+            }
+        }
+    }
+
+    /**
+     * Update status bar appearance on theme changes
+     */
+    private void updateStatusBarAppearance() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            Window window = getWindow();
+            if (window != null) {
+                int nightModeFlags = getResources().getConfiguration().uiMode &
+                        android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+                boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    if (isDarkMode) {
+                        // Dark mode: white icons
+                        window.getDecorView().setSystemUiVisibility(
+                                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        );
+                        window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
+                    } else {
+                        // Light mode: dark icons
+                        window.getDecorView().setSystemUiVisibility(
+                                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                                        View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                        );
+                        window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
+                    }
+                }
+            }
+        }
+    }
+
+    private void restoreState(Bundle savedInstanceState) {
+        isRootAvailable = savedInstanceState.getBoolean("isRootAvailable", false);
+        gatewayIp = savedInstanceState.getString("gatewayIp", "");
+        iface = savedInstanceState.getString("iface", "");
+        autoScanDone = savedInstanceState.getBoolean("autoScanDone", false);
+        showingKilled = savedInstanceState.getBoolean("showingKilled", false);
+
+        // Restore devices list if saved
+        if (savedInstanceState.containsKey("devices")) {
+            List<Device> savedDevices = (List<Device>) savedInstanceState.getSerializable("devices");
+            if (savedDevices != null && !savedDevices.isEmpty()) {
+                devices.clear();
+                devices.addAll(savedDevices);
+            }
+        }
+
+        // Restore sessions if saved
+        if (savedInstanceState.containsKey("sessionKeys")) {
+            if (killedManager != null) {
+                for (Device d : devices) {
+                    if (killedManager.isDeviceKilled(d)) {
+                        d.isCut = true;
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean("isRootAvailable", isRootAvailable);
+        outState.putString("gatewayIp", gatewayIp);
+        outState.putString("iface", iface);
+        outState.putBoolean("autoScanDone", autoScanDone);
+        outState.putBoolean("showingKilled", showingKilled);
+
+        // Save devices list
+        if (!devices.isEmpty()) {
+            outState.putSerializable("devices", new ArrayList<>(devices));
+        }
+
+        // Save session keys
+        if (!sessionsByDeviceId.isEmpty()) {
+            outState.putStringArrayList("sessionKeys", new ArrayList<>(sessionsByDeviceId.keySet()));
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        Log.d(TAG, "Configuration changed, preserving state...");
+
+        // Update status bar appearance for the new theme
+        updateStatusBarAppearance();
+
+        // The activity is not recreating, just refresh UI
+        runOnUi(() -> {
+            // Update UI with preserved data
+            if (tvGateway != null && gatewayIp != null) {
+                tvGateway.setText("🌐 Gateway: " + gatewayIp);
+            }
+            if (tvIface != null && iface != null) {
+                tvIface.setText("📶 Iface: " + iface);
+            }
+
+            // Refresh device list
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
+
+            // Update status
+            if (tvStatus != null) {
+                if (devices.isEmpty()) {
+                    tvStatus.setText("Ready");
+                } else {
+                    tvStatus.setText("📱 Devices (" + devices.size() + ")");
+                }
+            }
+
+            // Update killed count
+            updateKilledCount();
+
+            // Refresh killed fragment if showing
+            if (showingKilled && killedFragment != null) {
+                killedFragment.refresh();
+            }
+
+            // Update button states based on active sessions
+            boolean hasActiveSessions = !sessionsByDeviceId.isEmpty();
+            if (btnStop != null) {
+                btnStop.setEnabled(hasActiveSessions);
+            }
+            if (btnScan != null) {
+                btnScan.setEnabled(!isScanning.get() && !hasActiveSessions);
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        // Only clean up if we're not in a configuration change
+        if (!isChangingConfigurations()) {
+            stopAllSessions();
+            if (shellManager != null) {
+                shellManager.close();
+            }
+            // Clear static data only on full destroy
+            if (!isChangingConfigurations()) {
+                devices.clear();
+                sessionsByDeviceId.clear();
+                startRetryCount.clear();
+            }
+        } else {
+            // Just stop sessions but keep data
+            stopAllSessions();
+        }
+        super.onDestroy();
+    }
+
+    // ... (keep all your existing methods unchanged from here) ...
+
     private void showRootDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("Root Required")
@@ -135,12 +369,6 @@ public class MainActivity extends AppCompatActivity {
                 .setNegativeButton("Continue", null)
                 .show();
     }
-    @Override
-    protected void onDestroy() {
-        stopAllSessions();
-        if (shellManager != null) shellManager.close();
-        super.onDestroy();
-    }
 
     private void initializeViews() {
         tvGateway = findViewById(R.id.tvGateway);
@@ -154,17 +382,17 @@ public class MainActivity extends AppCompatActivity {
         btnShowDevices = findViewById(R.id.btnShowDevices);
         lvDevices = findViewById(R.id.lvDevices);
 
-
         adapter = new DeviceAdapter(MainActivity.this, devices);
         lvDevices.setAdapter(adapter);
 
         btnStop.setEnabled(false);
         btnRestoreArp.setEnabled(true);
         btnShowDevices.setVisibility(View.GONE);
-        tvStatus.setText("Ready");
+
+        if (tvStatus != null) {
+            tvStatus.setText("Ready");
+        }
     }
-
-
 
     private void requestPermissions() {
         List<String> permissions = new ArrayList<>();
@@ -210,10 +438,8 @@ public class MainActivity extends AppCompatActivity {
         btnRestoreArp.setOnClickListener(v -> restoreAllArp());
         btnShowKilled.setOnClickListener(v -> showKilledDevices());
         btnShowDevices.setOnClickListener(v -> showDevices());
-
-
-
     }
+
     private void performAutoScan() {
         if (autoScanDone) return;
         autoScanDone = true;
@@ -247,7 +473,7 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("📱 Devices (" + devices.size() + ")");
 
         FragmentManager fm = getSupportFragmentManager();
-        if (killedFragment.isAdded()) {
+        if (killedFragment != null && killedFragment.isAdded()) {
             fm.beginTransaction().remove(killedFragment).commitAllowingStateLoss();
         }
 
@@ -329,6 +555,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
+
     private void runOnUi(Runnable r) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             r.run();
@@ -336,6 +563,7 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(r);
         }
     }
+
     private void restoreKilledSession(Device d) {
         if (d != null && d.mac != null && !d.mac.isEmpty()) {
             Log.d(TAG, "Auto-restoring killed session for: " + d.mac);
@@ -398,7 +626,6 @@ public class MainActivity extends AppCompatActivity {
                             tvStatus.setText("🔴 Running for " + d.ip + " (pid: " + pid + ")");
                             btnStop.setEnabled(true);
                             btnScan.setEnabled(false);
-
                         });
                     }
 
@@ -410,7 +637,6 @@ public class MainActivity extends AppCompatActivity {
                             session.pid = -1;
                             d.isCut = false;
 
-                            // Remove from sessions map when stopped
                             sessionsByDeviceId.remove(sessionKey);
 
                             adapter.notifyDataSetChanged();
@@ -419,7 +645,6 @@ public class MainActivity extends AppCompatActivity {
                             btnScan.setEnabled(true);
                             isStopping.set(false);
                             updateKilledCount();
-
                         });
                     }
 
@@ -446,7 +671,6 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 }, RETRY_DELAY_MS);
                             } else {
-                                // Remove from sessions map on crash
                                 sessionsByDeviceId.remove(sessionKey);
                                 adapter.notifyDataSetChanged();
                                 tvStatus.setText("⚠️ Crashed for " + d.ip);
@@ -508,7 +732,6 @@ public class MainActivity extends AppCompatActivity {
         if (session != null && session.running) {
             stopSession(d);
         } else {
-            // Remove from killed list
             if (killedManager != null) {
                 killedManager.removeKilledDevice(d);
             }
@@ -516,7 +739,6 @@ public class MainActivity extends AppCompatActivity {
             updateKilledCount();
             startRetryCount.remove(d.deviceId);
 
-            // Remove from sessions map if present
             sessionsByDeviceId.remove(d.deviceId);
 
             for (Device device : devices) {
@@ -609,7 +831,6 @@ public class MainActivity extends AppCompatActivity {
                     btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
                     isStopping.set(false);
-
                 });
 
             } catch (Exception e) {
@@ -644,7 +865,6 @@ public class MainActivity extends AppCompatActivity {
             btnScan.setEnabled(true);
             isStopping.set(false);
             startRetryCount.remove(sessionKey);
-
         });
     }
 
@@ -777,10 +997,8 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 if (success) {
                     tvStatus.setText("✅ ARP restored successfully");
-
                 } else {
                     tvStatus.setText("✅⚠️ Some ARP entries may not have restored");
-
                 }
                 btnRestoreArp.setEnabled(true);
             });
@@ -800,10 +1018,13 @@ public class MainActivity extends AppCompatActivity {
                         Toast.LENGTH_LONG).show();
             } else {
                 initializeNetworkInfo();
-                performAutoScan();
+                if (devices.isEmpty()) {
+                    performAutoScan();
+                }
             }
         }
     }
+
     public void toggleKillDirectly(int position) {
         if (position < 0 || position >= devices.size()) return;
 
@@ -828,11 +1049,19 @@ public class MainActivity extends AppCompatActivity {
             startSessionWithRetry(d);
         }
     }
+
     @Override
     protected void onResume() {
         super.onResume();
+        // Update status bar when returning to app
+        updateStatusBarAppearance();
         updateKilledCount();
         if (killedFragment != null && showingKilled) {
             killedFragment.refresh();
         }
-    }}
+        // Refresh device list if we have devices
+        if (!devices.isEmpty() && adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
+    }
+}

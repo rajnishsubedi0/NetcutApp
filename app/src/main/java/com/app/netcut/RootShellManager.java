@@ -1,6 +1,5 @@
 package com.app.netcut;
 
-
 import android.util.Log;
 
 import com.topjohnwu.superuser.Shell;
@@ -10,12 +9,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-
 public class RootShellManager {
 
     private static final String TAG = "RootShellManager";
-
-    private static RootShellManager instance;
+    private static volatile RootShellManager instance;
+    private static final Object lock = new Object();
 
     private Shell shell;
     private boolean isInitialized = false;
@@ -25,17 +23,31 @@ public class RootShellManager {
         initializeShell();
     }
 
-    public static synchronized RootShellManager getInstance() {
+    public static RootShellManager getInstance() {
         if (instance == null) {
-            instance = new RootShellManager();
+            synchronized (lock) {
+                if (instance == null) {
+                    instance = new RootShellManager();
+                }
+            }
         }
         return instance;
     }
 
-
+    public synchronized void reinitialize() {
+        closeInternal();
+        initializeShell();
+    }
 
     private synchronized void initializeShell() {
         try {
+            if (shell != null && shell.isAlive()) {
+                isShellAvailable.set(true);
+                isInitialized = true;
+                Log.d(TAG, "Root shell already initialized and alive");
+                return;
+            }
+
             Shell.Builder builder = Shell.Builder.create()
                     .setFlags(Shell.FLAG_REDIRECT_STDERR)
                     .setTimeout(30);
@@ -61,67 +73,116 @@ public class RootShellManager {
 
     public boolean isShellAvailable() {
         try {
-            return isInitialized && shell != null && shell.isAlive() && isShellAvailable.get();
+            if (isInitialized && shell != null) {
+                boolean alive = shell.isAlive();
+                if (!alive) {
+                    isShellAvailable.set(false);
+                    isInitialized = false;
+                    Log.w(TAG, "Shell died, will reinitialize on next call");
+                } else {
+                    isShellAvailable.set(true);
+                }
+                return alive && isShellAvailable.get();
+            }
+            return false;
         } catch (Exception e) {
+            Log.e(TAG, "Error checking shell availability", e);
             return false;
         }
     }
 
     public List<String> executeCommandLines(String command) {
         if (!isShellAvailable()) {
-            Log.w(TAG, "Root shell not available");
-            return new ArrayList<>();
+            if (!isInitialized) {
+                Log.d(TAG, "Shell not initialized, trying to reinitialize...");
+                initializeShell();
+                if (!isShellAvailable()) {
+                    Log.w(TAG, "Root shell still not available after reinitialization");
+                    return new ArrayList<>();
+                }
+            } else {
+                Log.w(TAG, "Root shell not available");
+                return new ArrayList<>();
+            }
         }
+
         try {
             Shell.Result result = Shell.cmd(command).exec();
             if (result.isSuccess()) {
                 return new ArrayList<>(result.getOut());
             }
             if (!result.getErr().isEmpty()) {
+                Log.w(TAG, "Command error output: " + result.getErr());
                 return new ArrayList<>(result.getErr());
             }
             return new ArrayList<>();
         } catch (Exception e) {
             Log.e(TAG, "Failed to execute command: " + command, e);
+            isShellAvailable.set(false);
+            isInitialized = false;
             return new ArrayList<>();
         }
     }
 
-
     public boolean executeCommandBool(String command) {
         if (!isShellAvailable()) {
-            Log.w(TAG, "Root shell not available");
-            return false;
+            if (!isInitialized) {
+                initializeShell();
+                if (!isShellAvailable()) {
+                    Log.w(TAG, "Root shell not available");
+                    return false;
+                }
+            } else {
+                Log.w(TAG, "Root shell not available");
+                return false;
+            }
         }
+
         try {
-            return Shell.cmd(command).exec().isSuccess();
+            Shell.Result result = Shell.cmd(command).exec();
+            return result.isSuccess();
         } catch (Exception e) {
             Log.e(TAG, "Failed to execute command: " + command, e);
+            isShellAvailable.set(false);
+            isInitialized = false;
             return false;
         }
     }
 
-
     public boolean hasRootAccess() {
-        if (!isShellAvailable()) return false;
+        if (!isShellAvailable()) {
+            if (!isInitialized) {
+                initializeShell();
+                if (!isShellAvailable()) {
+                    Log.w(TAG, "Cannot check root access - shell not available");
+                    return false;
+                }
+            } else {
+                Log.w(TAG, "Cannot check root access - shell not available");
+                return false;
+            }
+        }
+
         try {
             Shell.Result result = Shell.cmd("id").exec();
-            if (!result.isSuccess()) return false;
+            if (!result.isSuccess()) {
+                Log.w(TAG, "id command failed");
+                return false;
+            }
             String output = String.join("", result.getOut());
             boolean hasRoot = output.contains("uid=0") || output.contains("root");
             Log.d(TAG, "Root check result: " + hasRoot + " output=" + output);
             return hasRoot;
         } catch (Exception e) {
             Log.e(TAG, "Root check error", e);
+            isShellAvailable.set(false);
+            isInitialized = false;
             return false;
         }
     }
 
-
-
     public synchronized void close() {
         closeInternal();
-
     }
 
     private void closeInternal() {
@@ -139,4 +200,10 @@ public class RootShellManager {
         isShellAvailable.set(false);
     }
 
+    public static synchronized void cleanup() {
+        if (instance != null) {
+            instance.close();
+            instance = null;
+        }
+    }
 }
