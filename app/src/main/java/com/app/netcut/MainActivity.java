@@ -231,6 +231,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    @SuppressWarnings("unchecked")
     private void restoreState(Bundle savedInstanceState) {
         isRootAvailable = savedInstanceState.getBoolean("isRootAvailable", false);
         gatewayIp = savedInstanceState.getString("gatewayIp", "");
@@ -238,22 +239,16 @@ public class MainActivity extends AppCompatActivity {
         autoScanDone = savedInstanceState.getBoolean("autoScanDone", false);
         showingKilled = savedInstanceState.getBoolean("showingKilled", false);
 
-        // Restore devices list if saved
-        if (savedInstanceState.containsKey("devices")) {
-            List<Device> savedDevices = (List<Device>) savedInstanceState.getSerializable("devices");
-            if (savedDevices != null && !savedDevices.isEmpty()) {
-                devices.clear();
-                devices.addAll(savedDevices);
-            }
+        Object obj = savedInstanceState.getSerializable("devices");
+        if (obj instanceof ArrayList) {
+            devices.clear();
+            devices.addAll((ArrayList<Device>) obj);
         }
 
-        // Restore sessions if saved
-        if (savedInstanceState.containsKey("sessionKeys")) {
-            if (killedManager != null) {
-                for (Device d : devices) {
-                    if (killedManager.isDeviceKilled(d)) {
-                        d.isCut = true;
-                    }
+        if (killedManager != null) {
+            for (Device d : devices) {
+                if (killedManager.isDeviceKilled(d)) {
+                    d.isCut = true;
                 }
             }
         }
@@ -330,23 +325,17 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+
     @Override
     protected void onDestroy() {
-        // Only clean up if we're not in a configuration change
         if (!isChangingConfigurations()) {
             stopAllSessions();
             if (shellManager != null) {
                 shellManager.close();
             }
-            // Clear static data only on full destroy
-            if (!isChangingConfigurations()) {
-                devices.clear();
-                sessionsByDeviceId.clear();
-                startRetryCount.clear();
-            }
-        } else {
-            // Just stop sessions but keep data
-            stopAllSessions();
+            devices.clear();
+            sessionsByDeviceId.clear();
+            startRetryCount.clear();
         }
         super.onDestroy();
     }
