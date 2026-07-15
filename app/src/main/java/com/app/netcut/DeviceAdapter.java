@@ -7,9 +7,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 
 
@@ -21,6 +23,7 @@ import java.util.List;
 public class DeviceAdapter extends ArrayAdapter<Device> {
     private final MainActivity context;
     Button statusBadge;
+
     public DeviceAdapter(Context ctx, List<Device> list) {
         super(ctx, 0, list);
         this.context = (MainActivity) ctx;
@@ -39,7 +42,9 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         TextView mac = convertView.findViewById(R.id.tvMac);
         TextView vendor = convertView.findViewById(R.id.tvVendor);
         statusBadge= convertView.findViewById(R.id.tvStatusBadge);
+        LinearLayout linearLayout=convertView.findViewById(R.id.greenColorId);
         TextView customName = convertView.findViewById(R.id.tvCustomName);
+        LinearLayout button_bg_layout =convertView.findViewById(R.id.button_bg_layout);
 
         ip.setText(d.ip);
         mac.setText(d.mac);
@@ -59,19 +64,27 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         if (d.isGateway) {
             statusBadge.setText("Gateway");
             statusBadge.setTextColor(Color.parseColor("#FFC107"));
+            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_yellow);
+            button_bg_layout.setBackgroundResource(R.drawable.button_bg_yellow);
             ip.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
             statusBadge.setText("Revive");
             statusBadge.setTextColor(Color.parseColor("#4CAF50"));
             ip.setTextColor(Color.parseColor("#F44336"));
+            button_bg_layout.setBackgroundResource(R.drawable.button_bg_green);
+            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_red);
         } else if (info != null) {
-            statusBadge.setText("Processing");
+            statusBadge.setText(".....");
             statusBadge.setTextColor(Color.parseColor("#FFBF00"));
-            ip.setTextColor(Color.parseColor("#FF6B6B"));
+            ip.setTextColor(Color.parseColor("#A5C4E8"));
+            button_bg_layout.setBackgroundResource(R.drawable.button_bg_red);
+            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_red);
         } else {
             statusBadge.setText("Cut");
             statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
             ip.setTextColor(Color.parseColor("#4CAF50"));
+            button_bg_layout.setBackgroundResource(R.drawable.button_bg_red);
+            linearLayout.setBackgroundResource(R.drawable.bg_for_item_view_green);
         }
 
         // Show custom name if set
