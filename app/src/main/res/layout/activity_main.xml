@@ -36,7 +36,7 @@
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/tvKilledCount"
+                android:id="@+id/killedDeviceCounterTextView"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:paddingHorizontal="12dp"
@@ -54,7 +54,7 @@
             android:orientation="horizontal">
 
             <TextView
-                android:id="@+id/tvGateway"
+                android:id="@+id/routerGatewayIpAddress"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -63,7 +63,7 @@
                 android:textSize="13sp" />
 
             <TextView
-                android:id="@+id/tvIface"
+                android:id="@+id/networkInterfaceName"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="📶 Interface: wlan0"
@@ -73,7 +73,7 @@
 
         <!-- Status -->
         <TextView
-            android:id="@+id/tvStatus"
+            android:id="@+id/logOutputDetailsTextView"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
@@ -91,7 +91,7 @@
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btnScan"
+                android:id="@+id/btnScanNetworks"
                 style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -102,7 +102,7 @@
                 android:textColor="#FFFFFF" />
 
             <Button
-                android:id="@+id/btnStop"
+                android:id="@+id/btnStopAttack"
                 style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -134,7 +134,7 @@
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btnShowKilled"
+                android:id="@+id/btnShowKilledDevices_for_mainactivity"
                 style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -145,7 +145,7 @@
                 android:textColor="#C9D1D9" />
 
             <Button
-                android:id="@+id/btnShowDevices"
+                android:id="@+id/btnShowDevicesFor_Fragment"
                 style="@style/NetCutButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -168,7 +168,7 @@
 
         <!-- Device List -->
         <ListView
-            android:id="@+id/lvDevices"
+            android:id="@+id/scannedDeviceListview"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"

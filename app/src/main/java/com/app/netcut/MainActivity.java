@@ -17,6 +17,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -40,9 +41,9 @@ public class MainActivity extends AppCompatActivity {
     private static final int MAX_START_RETRIES = 3;
     private static final long RETRY_DELAY_MS = 2000;
 
-    private TextView tvGateway, tvIface, tvStatus, tvKilledCount;
-    private Button btnScan, btnStop, btnRestoreArp, btnShowKilled, btnShowDevices;
-    private ListView lvDevices;
+    private TextView routerGatewayIpAddress, networkInterface, logOutputDetailsTextView, killedDeviceCounterTextView;
+    private Button btnScanNetworks, btnStopAttack, btnRestoreArp, btnShowKilled, btnShowDevices;
+    private ListView scannedDeviceListview;
 
     // Make devices list static to persist across configuration changes
     private static final List<Device> devices = new CopyOnWriteArrayList<>();
@@ -50,7 +51,7 @@ public class MainActivity extends AppCompatActivity {
     private KilledDevicesFragment killedFragment;
     private KilledDevicesManager killedManager;
 
-    private final HostScanner scanner = new HostScanner();
+    private final HostScanner hostScanner = new HostScanner();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private ArpRestore arpRestore;
@@ -98,7 +99,7 @@ public class MainActivity extends AppCompatActivity {
         // If we already have devices, update the UI
         if (!devices.isEmpty()) {
             adapter.notifyDataSetChanged();
-            tvStatus.setText("📱 Devices (" + devices.size() + ")");
+            logOutputDetailsTextView.setText("📱 Devices (" + devices.size() + ")");
             updateKilledCount();
 
             // Update each device's running state
@@ -112,8 +113,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         mainHandler.post(() -> {
-            if (tvStatus != null && tvStatus.getText().toString().equals("Initializing...")) {
-                tvStatus.setText("Ready");
+            if (logOutputDetailsTextView != null && logOutputDetailsTextView.getText().toString().equals("Initializing...")) {
+                logOutputDetailsTextView.setText("Ready");
             }
         });
 
@@ -133,11 +134,11 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 runOnUi(() -> {
-                    tvGateway.setText("🌐 Gateway: " + gatewayIp);
-                    tvIface.setText("📶 Iface: " + iface);
+                    routerGatewayIpAddress.setText("🌐 Gateway: " + gatewayIp);
+                    networkInterface.setText("📶 Iface: " + iface);
 
                     if (devices.isEmpty()) {
-                        tvStatus.setText("Ready");
+                        logOutputDetailsTextView.setText("Ready");
                     }
 
                     updateKilledCount();
@@ -152,7 +153,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 Log.e(TAG, "Initialization failed", e);
                 runOnUi(() -> {
-                    tvStatus.setText("Initialization failed");
+                    logOutputDetailsTextView.setText("Initialization failed");
                     Toast.makeText(this, "Init failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             }
@@ -163,38 +164,31 @@ public class MainActivity extends AppCompatActivity {
      * Handle status bar appearance for both light and dark themes
      */
     private void handleStatusBar() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            Window window = getWindow();
-            window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
-            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        Window window = getWindow();
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
 
-            // Check if it's dark mode
-            int nightModeFlags = getResources().getConfiguration().uiMode &
-                    android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-            boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        // Check if it's dark mode
+        int nightModeFlags = getResources().getConfiguration().uiMode &
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                // For Android M and above, set status bar icon color based on theme
-                if (isDarkMode) {
-                    // Dark mode: white icons
-                    window.getDecorView().setSystemUiVisibility(
-                            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    );
-                    window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
-                } else {
-                    // Light mode: dark icons
-                    window.getDecorView().setSystemUiVisibility(
-                            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-                                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                    );
-                    window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
-                }
-            } else {
-                // For older Android versions
-                window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
-            }
+        // For Android M and above, set status bar icon color based on theme
+        if (isDarkMode) {
+            // Dark mode: white icons
+            window.getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            );
+            window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
+        } else {
+            // Light mode: dark icons
+            window.getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            );
+            window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
         }
     }
 
@@ -202,31 +196,27 @@ public class MainActivity extends AppCompatActivity {
      * Update status bar appearance on theme changes
      */
     private void updateStatusBarAppearance() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            Window window = getWindow();
-            if (window != null) {
-                int nightModeFlags = getResources().getConfiguration().uiMode &
-                        android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-                boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        Window window = getWindow();
+        if (window != null) {
+            int nightModeFlags = getResources().getConfiguration().uiMode &
+                    android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+            boolean isDarkMode = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES;
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    if (isDarkMode) {
-                        // Dark mode: white icons
-                        window.getDecorView().setSystemUiVisibility(
-                                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        );
-                        window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
-                    } else {
-                        // Light mode: dark icons
-                        window.getDecorView().setSystemUiVisibility(
-                                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-                                        View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                        );
-                        window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
-                    }
-                }
+            if (isDarkMode) {
+                // Dark mode: white icons
+                window.getDecorView().setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                );
+                window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.black));
+            } else {
+                // Light mode: dark icons
+                window.getDecorView().setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                );
+                window.setStatusBarColor(ContextCompat.getColor(this, android.R.color.white));
             }
         }
     }
@@ -255,7 +245,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean("isRootAvailable", isRootAvailable);
         outState.putString("gatewayIp", gatewayIp);
@@ -285,11 +275,11 @@ public class MainActivity extends AppCompatActivity {
         // The activity is not recreating, just refresh UI
         runOnUi(() -> {
             // Update UI with preserved data
-            if (tvGateway != null && gatewayIp != null) {
-                tvGateway.setText("🌐 Gateway: " + gatewayIp);
+            if (routerGatewayIpAddress != null && gatewayIp != null) {
+                routerGatewayIpAddress.setText("🌐 Gateway: " + gatewayIp);
             }
-            if (tvIface != null && iface != null) {
-                tvIface.setText("📶 Iface: " + iface);
+            if (networkInterface != null && iface != null) {
+                networkInterface.setText("📶 Interface: " + iface);
             }
 
             // Refresh device list
@@ -298,11 +288,11 @@ public class MainActivity extends AppCompatActivity {
             }
 
             // Update status
-            if (tvStatus != null) {
+            if (logOutputDetailsTextView != null) {
                 if (devices.isEmpty()) {
-                    tvStatus.setText("Ready");
+                    logOutputDetailsTextView.setText("Ready");
                 } else {
-                    tvStatus.setText("📱 Devices (" + devices.size() + ")");
+                    logOutputDetailsTextView.setText("📱 Devices (" + devices.size() + ")");
                 }
             }
 
@@ -316,11 +306,11 @@ public class MainActivity extends AppCompatActivity {
 
             // Update button states based on active sessions
             boolean hasActiveSessions = !sessionsByDeviceId.isEmpty();
-            if (btnStop != null) {
-                btnStop.setEnabled(hasActiveSessions);
+            if (btnStopAttack != null) {
+                btnStopAttack.setEnabled(hasActiveSessions);
             }
-            if (btnScan != null) {
-                btnScan.setEnabled(!isScanning.get() && !hasActiveSessions);
+            if (btnScanNetworks != null) {
+                btnScanNetworks.setEnabled(!isScanning.get() && !hasActiveSessions);
             }
         });
     }
@@ -360,26 +350,26 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initializeViews() {
-        tvGateway = findViewById(R.id.tvGateway);
-        tvIface = findViewById(R.id.tvIface);
-        tvStatus = findViewById(R.id.tvStatus);
-        tvKilledCount = findViewById(R.id.tvKilledCount);
-        btnScan = findViewById(R.id.btnScan);
-        btnStop = findViewById(R.id.btnStop);
+        routerGatewayIpAddress = findViewById(R.id.routerGatewayIpAddress);
+        networkInterface = findViewById(R.id.networkInterfaceName);
+        logOutputDetailsTextView = findViewById(R.id.logOutputDetailsTextView);
+        killedDeviceCounterTextView = findViewById(R.id.killedDeviceCounterTextView);
+        btnScanNetworks = findViewById(R.id.btnScanNetworks);
+        btnStopAttack = findViewById(R.id.btnStopAttack);
         btnRestoreArp = findViewById(R.id.btnRestoreArp);
-        btnShowKilled = findViewById(R.id.btnShowKilled);
-        btnShowDevices = findViewById(R.id.btnShowDevices);
-        lvDevices = findViewById(R.id.lvDevices);
+        btnShowKilled = findViewById(R.id.btnShowKilledDevices_for_mainactivity);
+        btnShowDevices = findViewById(R.id.btnShowDevicesFor_Fragment);
+        scannedDeviceListview = findViewById(R.id.scannedDeviceListview);
 
         adapter = new DeviceAdapter(MainActivity.this, devices);
-        lvDevices.setAdapter(adapter);
+        scannedDeviceListview.setAdapter(adapter);
 
-        btnStop.setEnabled(false);
+        btnStopAttack.setEnabled(false);
         btnRestoreArp.setEnabled(true);
         btnShowDevices.setVisibility(View.GONE);
 
-        if (tvStatus != null) {
-            tvStatus.setText("Ready");
+        if (logOutputDetailsTextView != null) {
+            logOutputDetailsTextView.setText("Ready");
         }
     }
 
@@ -413,8 +403,8 @@ public class MainActivity extends AppCompatActivity {
     private void initializeNetworkInfo() {
         try {
             gatewayIp = NetUtils.getGatewayIp(this);
-            tvGateway.setText("🌐 Gateway: " + gatewayIp);
-            tvIface.setText("📶 Iface: " + iface);
+            routerGatewayIpAddress.setText("🌐 Gateway: " + gatewayIp);
+            networkInterface.setText("📶 Iface: " + iface);
         } catch (Exception e) {
             Toast.makeText(this, "Failed to get network info", Toast.LENGTH_SHORT).show();
             Log.e(TAG, "initializeNetworkInfo failed", e);
@@ -422,8 +412,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupClickListeners() {
-        btnScan.setOnClickListener(v -> startScan());
-        btnStop.setOnClickListener(v -> stopAllSessions());
+        btnScanNetworks.setOnClickListener(v -> startScan());
+        btnStopAttack.setOnClickListener(v -> stopAllSessions());
         btnRestoreArp.setOnClickListener(v -> restoreAllArp());
         btnShowKilled.setOnClickListener(v -> showKilledDevices());
         btnShowDevices.setOnClickListener(v -> showDevices());
@@ -443,7 +433,7 @@ public class MainActivity extends AppCompatActivity {
         showingKilled = true;
         btnShowKilled.setVisibility(View.GONE);
         btnShowDevices.setVisibility(View.VISIBLE);
-        tvStatus.setText("📋 Killed Devices (" + killedManager.getCount() + ")");
+        logOutputDetailsTextView.setText("📋 Killed Devices (" + killedManager.getCount() + ")");
 
         killedFragment = new KilledDevicesFragment();
 
@@ -451,7 +441,7 @@ public class MainActivity extends AppCompatActivity {
                 .replace(R.id.fragment_container, killedFragment)
                 .commitAllowingStateLoss();
 
-        lvDevices.setVisibility(View.GONE);
+        scannedDeviceListview.setVisibility(View.GONE);
         findViewById(R.id.fragment_container).setVisibility(View.VISIBLE);
     }
 
@@ -459,14 +449,14 @@ public class MainActivity extends AppCompatActivity {
         showingKilled = false;
         btnShowKilled.setVisibility(View.VISIBLE);
         btnShowDevices.setVisibility(View.GONE);
-        tvStatus.setText("📱 Devices (" + devices.size() + ")");
+        logOutputDetailsTextView.setText("📱 Devices (" + devices.size() + ")");
 
         FragmentManager fm = getSupportFragmentManager();
         if (killedFragment != null && killedFragment.isAdded()) {
             fm.beginTransaction().remove(killedFragment).commitAllowingStateLoss();
         }
 
-        lvDevices.setVisibility(View.VISIBLE);
+        scannedDeviceListview.setVisibility(View.VISIBLE);
         findViewById(R.id.fragment_container).setVisibility(View.GONE);
         updateKilledCount();
     }
@@ -474,9 +464,9 @@ public class MainActivity extends AppCompatActivity {
     private void updateKilledCount() {
         runOnUi(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (tvKilledCount != null && killedManager != null) {
+            if (killedDeviceCounterTextView != null && killedManager != null) {
                 int count = killedManager.getCount();
-                tvKilledCount.setText("⚡ " + count);
+                killedDeviceCounterTextView.setText("⚡ " + count);
                 if (count > 0 && !showingKilled) {
                     btnShowKilled.setVisibility(View.VISIBLE);
                     btnShowKilled.setText("📋 Killed (" + count + ")");
@@ -495,17 +485,17 @@ public class MainActivity extends AppCompatActivity {
 
         devices.clear();
         adapter.notifyDataSetChanged();
-        btnScan.setEnabled(false);
-        btnScan.setText("⏳ Scanning...");
-        tvStatus.setText("📡 Scanning network...");
+        btnScanNetworks.setEnabled(false);
+        btnScanNetworks.setText("⏳ Scanning...");
+        logOutputDetailsTextView.setText("📡 Scanning network...");
 
-        scanner.scan(this, new HostScanner.ScanCallback() {
+        hostScanner.scan(this, new HostScanner.ScanCallback() {
             @Override
             public void onProgress(int done, int total) {
                 mainHandler.post(() -> {
-                    tvStatus.setText("📡 Scanning " + done + "/" + total);
+                    logOutputDetailsTextView.setText("📡 Scanning " + done + "/" + total);
                     if (total > 0) {
-                        btnScan.setText("⏳ " + done + "/" + total);
+                        btnScanNetworks.setText("⏳ " + done + "/" + total);
                     }
                 });
             }
@@ -536,9 +526,9 @@ public class MainActivity extends AppCompatActivity {
 
                     adapter.notifyDataSetChanged();
                     isScanning.set(false);
-                    btnScan.setEnabled(true);
-                    btnScan.setText("🔍 Scan");
-                    tvStatus.setText("✅ Found " + found.size() + " devices. Tap to kill.");
+                    btnScanNetworks.setEnabled(true);
+                    btnScanNetworks.setText("🔍 Scan");
+                    logOutputDetailsTextView.setText("✅ Found " + found.size() + " devices. Tap to kill.");
                     updateKilledCount();
                 });
             }
@@ -612,9 +602,9 @@ public class MainActivity extends AppCompatActivity {
                             updateKilledCount();
 
                             adapter.notifyDataSetChanged();
-                            tvStatus.setText("🔴 Running for " + d.ip + " (pid: " + pid + ")");
-                            btnStop.setEnabled(true);
-                            btnScan.setEnabled(false);
+                            logOutputDetailsTextView.setText("🔴 Running for " + d.ip + " (pid: " + pid + ")");
+                            btnStopAttack.setEnabled(true);
+                            btnScanNetworks.setEnabled(false);
                         });
                     }
 
@@ -629,9 +619,9 @@ public class MainActivity extends AppCompatActivity {
                             sessionsByDeviceId.remove(sessionKey);
 
                             adapter.notifyDataSetChanged();
-                            tvStatus.setText("🟢 Stopped for " + d.ip);
-                            btnStop.setEnabled(false);
-                            btnScan.setEnabled(true);
+                            logOutputDetailsTextView.setText("🟢 Stopped for " + d.ip);
+                            btnStopAttack.setEnabled(false);
+                            btnScanNetworks.setEnabled(true);
                             isStopping.set(false);
                             updateKilledCount();
                         });
@@ -651,7 +641,7 @@ public class MainActivity extends AppCompatActivity {
                                     (reason == null || !reason.contains("user stopped"))) {
                                 Log.d(TAG, "Session crashed, scheduling retry " + (retryCount + 1) +
                                         " for " + d.ip);
-                                tvStatus.setText("🔄 Retrying " + d.ip + " (" + (retryCount + 1) + "/" +
+                                logOutputDetailsTextView.setText("🔄 Retrying " + d.ip + " (" + (retryCount + 1) + "/" +
                                         MAX_START_RETRIES + ")");
 
                                 mainHandler.postDelayed(() -> {
@@ -662,9 +652,9 @@ public class MainActivity extends AppCompatActivity {
                             } else {
                                 sessionsByDeviceId.remove(sessionKey);
                                 adapter.notifyDataSetChanged();
-                                tvStatus.setText("⚠️ Crashed for " + d.ip);
-                                btnStop.setEnabled(false);
-                                btnScan.setEnabled(true);
+                                logOutputDetailsTextView.setText("⚠️ Crashed for " + d.ip);
+                                btnStopAttack.setEnabled(false);
+                                btnScanNetworks.setEnabled(true);
                                 isStopping.set(false);
                                 Toast.makeText(MainActivity.this,
                                         "⚠️ Session crashed: " + d.ip,
@@ -701,9 +691,9 @@ public class MainActivity extends AppCompatActivity {
                         killedManager.removeKilledDevice(d);
                     }
                     adapter.notifyDataSetChanged();
-                    tvStatus.setText("❌ Failed to start for " + d.ip);
-                    btnScan.setEnabled(true);
-                    btnStop.setEnabled(false);
+                    logOutputDetailsTextView.setText("❌ Failed to start for " + d.ip);
+                    btnScanNetworks.setEnabled(true);
+                    btnStopAttack.setEnabled(false);
                     updateKilledCount();
                     Toast.makeText(MainActivity.this,
                             "Failed to start for " + d.ip + ": " + e.getMessage(),
@@ -756,9 +746,9 @@ public class MainActivity extends AppCompatActivity {
 
         isStopping.set(true);
         session.stopping = true;
-        tvStatus.setText("⏹ Stopping " + d.ip + "...");
-        btnStop.setEnabled(false);
-        btnScan.setEnabled(false);
+        logOutputDetailsTextView.setText("⏹ Stopping " + d.ip + "...");
+        btnStopAttack.setEnabled(false);
+        btnScanNetworks.setEnabled(false);
 
         startRetryCount.remove(sessionKey);
 
@@ -787,9 +777,9 @@ public class MainActivity extends AppCompatActivity {
                     d.isCut = false;
                     sessionsByDeviceId.remove(sessionKey);
                     adapter.notifyDataSetChanged();
-                    tvStatus.setText("✅ Network restored for " + d.ip);
-                    btnStop.setEnabled(false);
-                    btnScan.setEnabled(true);
+                    logOutputDetailsTextView.setText("✅ Network restored for " + d.ip);
+                    btnStopAttack.setEnabled(false);
+                    btnScanNetworks.setEnabled(true);
                     isStopping.set(false);
                     updateKilledCount();
                 });
@@ -821,9 +811,9 @@ public class MainActivity extends AppCompatActivity {
             sessionsByDeviceId.remove(sessionKey);
             d.isCut = false;
             adapter.notifyDataSetChanged();
-            tvStatus.setText("🔄 Emergency stopped " + d.ip);
-            btnStop.setEnabled(false);
-            btnScan.setEnabled(true);
+            logOutputDetailsTextView.setText("🔄 Emergency stopped " + d.ip);
+            btnStopAttack.setEnabled(false);
+            btnScanNetworks.setEnabled(true);
             isStopping.set(false);
             startRetryCount.remove(sessionKey);
         });
@@ -840,9 +830,9 @@ public class MainActivity extends AppCompatActivity {
 
         isStopping.set(true);
         runOnUi(() -> {
-            tvStatus.setText("⏹ Stopping all sessions...");
-            btnStop.setEnabled(false);
-            btnScan.setEnabled(false);
+            logOutputDetailsTextView.setText("⏹ Stopping all sessions...");
+            btnStopAttack.setEnabled(false);
+            btnScanNetworks.setEnabled(false);
         });
 
         new Thread(() -> {
@@ -880,9 +870,9 @@ public class MainActivity extends AppCompatActivity {
                     killedFragment.refresh();
                 }
                 updateKilledCount();
-                tvStatus.setText("✅ All sessions stopped");
-                btnStop.setEnabled(false);
-                btnScan.setEnabled(true);
+                logOutputDetailsTextView.setText("✅ All sessions stopped");
+                btnStopAttack.setEnabled(false);
+                btnScanNetworks.setEnabled(true);
                 isStopping.set(false);
             });
         }).start();
@@ -920,7 +910,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void doRestoreAllArp() {
-        tvStatus.setText("🔄 Restoring ARP...");
+        logOutputDetailsTextView.setText("🔄 Restoring ARP...");
         btnRestoreArp.setEnabled(false);
 
         new Thread(() -> {
@@ -957,9 +947,9 @@ public class MainActivity extends AppCompatActivity {
             final boolean success = allSuccess;
             mainHandler.post(() -> {
                 if (success) {
-                    tvStatus.setText("✅ ARP restored successfully");
+                    logOutputDetailsTextView.setText("✅ ARP restored successfully");
                 } else {
-                    tvStatus.setText("✅⚠️ Some ARP entries may not have restored");
+                    logOutputDetailsTextView.setText("✅⚠️ Some ARP entries may not have restored");
                 }
                 btnRestoreArp.setEnabled(true);
             });

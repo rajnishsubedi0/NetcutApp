@@ -11,7 +11,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 
-import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 
 
@@ -22,7 +21,7 @@ import java.util.List;
 
 public class DeviceAdapter extends ArrayAdapter<Device> {
     private final MainActivity context;
-    Button statusBadge;
+    Button kill_and_revive_button;
 
     public DeviceAdapter(Context ctx, List<Device> list) {
         super(ctx, 0, list);
@@ -38,19 +37,19 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
         }
 
         Device d = getItem(position);
-        TextView ip = convertView.findViewById(R.id.tvIp);
-        TextView mac = convertView.findViewById(R.id.tvMac);
-        TextView vendor = convertView.findViewById(R.id.tvVendor);
-        statusBadge= convertView.findViewById(R.id.tvStatusBadge);
-        LinearLayout hz_bg_layout=convertView.findViewById(R.id.horizontalLinearLayoutForBg);
+        TextView ipAddressNameHolder = convertView.findViewById(R.id.ipAddressNameHolder);
+        TextView macAddressNameHolder = convertView.findViewById(R.id.macAddressNameHolder);
+        TextView deviceVendorTypeHolder = convertView.findViewById(R.id.deviceVendorTypeHolder);
+        kill_and_revive_button= convertView.findViewById(R.id.kill_and_revive_button);
+        LinearLayout hz_bg_layout=convertView.findViewById(R.id.horizontal_colorFilled_layout);
 
 
 
-        ip.setText(d.ip);
-        mac.setText(d.mac);
-        vendor.setText(d.vendor);
+        ipAddressNameHolder.setText(d.ip);
+        macAddressNameHolder.setText(d.mac);
+        deviceVendorTypeHolder.setText(d.vendor);
 
-        statusBadge.setOnClickListener(new View.OnClickListener() {
+        kill_and_revive_button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 context.toggleKillDirectly(position);
@@ -59,31 +58,31 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
 
         // Check if device is in killed list
         KilledDevicesManager manager = KilledDevicesManager.getInstance(context);
-        KilledDeviceInfo info = manager.getDeviceInfo(d.mac);
+//        KilledDeviceInfo info = manager.getDeviceInfo(d.mac);
 
         if (d.isGateway) {
-            statusBadge.setText("Gateway");
-            statusBadge.setTextColor(Color.parseColor("#FFC107"));
-            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_yellow);
+            kill_and_revive_button.setText("Gateway");
+            kill_and_revive_button.setTextColor(Color.parseColor("#FFC107"));
+            kill_and_revive_button.setBackgroundResource(R.drawable.border_for_listview_items_yellow);
             hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_yellow);
-            ip.setTextColor(Color.parseColor("#FFC107"));
+            ipAddressNameHolder.setTextColor(Color.parseColor("#FFC107"));
         } else if (d.isCut) {
-            statusBadge.setText("Revive");
-            statusBadge.setTextColor(Color.parseColor("#4CAF50"));
-            ip.setTextColor(Color.parseColor("#F44336"));
-            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_green);
+            kill_and_revive_button.setText("Revive");
+            kill_and_revive_button.setTextColor(Color.parseColor("#4CAF50"));
+            ipAddressNameHolder.setTextColor(Color.parseColor("#F44336"));
+            kill_and_revive_button.setBackgroundResource(R.drawable.border_for_listview_items_green);
             hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_red);
 //        } else if (info != null) {
 //            statusBadge.setText(".....");
 //            statusBadge.setTextColor(Color.parseColor("#FFBF00"));
-//            ip.setTextColor(Color.parseColor("#A5C4E8"));
+//            ipAddressNameHolder.setTextColor(Color.parseColor("#A5C4E8"));
 //            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
 //            hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_red);
         } else {
-            statusBadge.setText("Cut");
-            statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
-            ip.setTextColor(Color.parseColor("#4CAF50"));
-            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
+            kill_and_revive_button.setText("Cut");
+            kill_and_revive_button.setTextColor(Color.parseColor("#FF6B6B"));
+            ipAddressNameHolder.setTextColor(Color.parseColor("#4CAF50"));
+            kill_and_revive_button.setBackgroundResource(R.drawable.border_for_listview_items_red);
             hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_green);
         }
 

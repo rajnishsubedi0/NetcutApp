@@ -36,10 +36,10 @@ public class KilledDevicesFragment extends Fragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_killed_devices, container, false);
 
-        lvKilledDevices = view.findViewById(R.id.lvKilledDevices);
-        tvEmptyState = view.findViewById(R.id.tvEmptyState);
+        lvKilledDevices = view.findViewById(R.id.killedDevices_DisplayListView);
+        tvEmptyState = view.findViewById(R.id.txtviewEmptyState_i_dontKnow);
         tvCount = view.findViewById(R.id.tvCount);
-        btnClearAll = view.findViewById(R.id.btnClearAll);
+        btnClearAll = view.findViewById(R.id.btnClearDevice_FromKillList);
 
         // Initialize manager here
         if (getContext() != null) {
