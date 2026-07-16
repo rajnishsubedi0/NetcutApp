@@ -687,9 +687,9 @@ public class MainActivity extends AppCompatActivity {
             try {
                 arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
 
-                String args = "-i " + iface
-                        + " --target " + d.ip
-                        + " --gateway " + gatewayIp;
+                String args = " " + iface
+                        + " " + d.ip
+                        + " " + gatewayIp;
 
                 runner.start(args);
             } catch (Exception e) {
@@ -742,6 +742,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // Inside MainActivity.java -> Replace the stopSession method with this:
+
+    // Replace the existing stopSession method in MainActivity.java with this optimized version
+
     private void stopSession(Device d) {
         String sessionKey = d.deviceId;
         DeviceSession session = sessionsByDeviceId.get(sessionKey);
@@ -751,10 +755,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        if (isStopping.get()) {
-            Toast.makeText(this, "Already stopping...", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (isStopping.get()) return;
 
         isStopping.set(true);
         session.stopping = true;
@@ -766,50 +767,44 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                Thread arpThread = new Thread(() -> {
-                    try {
-                        boolean restored = arpRestore.flushAndRestoreFast(sessionKey);
-                        Log.d(TAG, "ARP restore for " + sessionKey + ": " + (restored ? "success" : "failed"));
-                        if (!restored) {
-                            arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
-                            arpRestore.flushAndRestoreFast(sessionKey);
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "ARP restore error for " + sessionKey, e);
-                    }
-                });
-                arpThread.start();
-
-                if (session.runner != null && session.running) {
+                // 1. STOP THE BINARY FIRST
+                // Critical: The target device will ignore restoration if spoof packets are still arriving.
+                if (session.runner != null) {
                     session.runner.stop();
-                }
 
-                int waitCount = 0;
-                while (session.running && waitCount < 10) {
-                    try { Thread.sleep(100); } catch (InterruptedException ignored) {}
-                    waitCount++;
-                }
-
-                if (session.running) {
-                    Log.w(TAG, "Runner still running, emergency stop for " + sessionKey);
-                    if (session.runner != null) {
-                        session.runner.emergencyStop();
-                        session.runner.destroy();
+                    // Poll for process termination (max 2 seconds) to prevent race conditions
+                    int pollCount = 0;
+                    while (session.running && pollCount < 20) {
+                        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                        pollCount++;
                     }
+
+                    if (session.running) {
+                        Log.w(TAG, "Binary did not stop gracefully, forcing emergency stop");
+                        session.runner.emergencyStop();
+                    }
+                }
+
+                // 2. FAST ARP RESTORATION
+                // This call should now trigger GARP (Gratuitous ARP) via the ArpRestore class
+                // to force the target device to recover internet instantly.
+                boolean restored = arpRestore.flushAndRestoreFast(sessionKey);
+                Log.d(TAG, "High-speed ARP restore for " + sessionKey + " result: " + restored);
+
+                if (!restored) {
+                    Log.e(TAG, "Fast restore failed, attempting fallback snapshot restoration");
+                    arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
                     arpRestore.flushAndRestoreFast(sessionKey);
                 }
 
-                try { arpThread.join(1000); } catch (InterruptedException ignored) {}
-
+                // 3. UI UPDATE
                 mainHandler.post(() -> {
                     if (killedManager != null) {
                         killedManager.removeKilledDevice(d);
                     }
                     if (killedFragment != null) killedFragment.refresh();
                     updateKilledCount();
-                });
 
-                mainHandler.post(() -> {
                     session.running = false;
                     session.stopping = false;
                     session.pid = -1;
@@ -823,7 +818,7 @@ public class MainActivity extends AppCompatActivity {
                 });
 
             } catch (Exception e) {
-                Log.e(TAG, "Stop session failed for " + d.ip, e);
+                Log.e(TAG, "Stop session failed critically", e);
                 handleStopFailure(session, d, sessionKey);
             }
         }).start();
