@@ -163,21 +163,22 @@ public class NetcutRunner implements Closeable {
             return;
         }
 
+        // 1. Send SIGTERM to trigger graceful shutdown and burst restoration
         shell.exec("kill -15 " + pid + " 2>/dev/null || true");
         shell.exec("pkill -15 -P " + pid + " 2>/dev/null || true");
 
-        SystemClock.sleep(300);
+        // 2. WAIT 1500ms. The C binary needs ~680ms to finish its safe unicast burst.
+        SystemClock.sleep(1500);
 
+        // 3. Only use SIGKILL if it's STILL alive
         if (isPidAlive(pid)) {
+            Log.w(TAG, "Process " + pid + " did not exit gracefully, forcing kill");
             shell.exec("kill -9 " + pid + " 2>/dev/null || true");
             shell.exec("pkill -9 -P " + pid + " 2>/dev/null || true");
             if (launchMode == LaunchMode.SETSID) {
                 shell.exec("kill -9 -- -" + pid + " 2>/dev/null || true");
             }
-        }
-
-        if (isPidAlive(pid)) {
-            forceKill();
+            SystemClock.sleep(200);
         }
     }
 

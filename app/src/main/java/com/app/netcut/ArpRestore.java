@@ -187,8 +187,13 @@ public class ArpRestore {
             }
         }
 
+        // FIXED: DO NOT flush the entire ARP table. Flushing deletes the gateway's
+        // MAC entry, causing Android's connectivity stack to momentarily think
+        // the Wi-Fi is broken and disconnect.
+
         if (gatewayIp != null && s.gatewayMac != null && !s.gatewayMac.isEmpty()) {
             String gwDev = s.arpDevices.getOrDefault(gatewayIp, interfaceName);
+            // 'nud reachable' forces the kernel to accept this entry immediately without probing
             boolean ok = shellManager.executeCommandBool(
                     "ip neigh replace " + shQ(gatewayIp) +
                             " lladdr " + shQ(s.gatewayMac) +
@@ -220,6 +225,7 @@ public class ArpRestore {
             String gatewayIp = NetUtils.getGatewayIp(context);
             if (gatewayIp == null || gatewayIp.isEmpty()) return false;
 
+            // Do not flush. Just try to read and reinforce the existing correct entry.
             List<String> lines = shellManager.executeCommandLines("ip neigh show " + shQ(gatewayIp));
             if (lines == null || lines.isEmpty()) return false;
 
@@ -254,6 +260,7 @@ public class ArpRestore {
             return false;
         }
     }
+
 
     public void removeSnapshot(String sessionKey) {
         synchronized (lock) {
