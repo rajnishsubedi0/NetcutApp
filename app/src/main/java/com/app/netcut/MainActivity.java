@@ -767,58 +767,38 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                // 1. STOP THE BINARY FIRST
-                // Critical: The target device will ignore restoration if spoof packets are still arriving.
                 if (session.runner != null) {
                     session.runner.stop();
-
-                    // Poll for process termination (max 2 seconds) to prevent race conditions
-                    int pollCount = 0;
-                    while (session.running && pollCount < 20) {
-                        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
-                        pollCount++;
-                    }
-
-                    if (session.running) {
-                        Log.w(TAG, "Binary did not stop gracefully, forcing emergency stop");
-                        session.runner.emergencyStop();
-                    }
                 }
 
-                // 2. FAST ARP RESTORATION
-                // This call should now trigger GARP (Gratuitous ARP) via the ArpRestore class
-                // to force the target device to recover internet instantly.
                 boolean restored = arpRestore.flushAndRestoreFast(sessionKey);
-                Log.d(TAG, "High-speed ARP restore for " + sessionKey + " result: " + restored);
+                Log.d(TAG, "Fast restore for " + sessionKey + " result: " + restored);
+
+                if (session.runner != null && session.running) {
+                    session.runner.emergencyStop();
+                }
 
                 if (!restored) {
-                    Log.e(TAG, "Fast restore failed, attempting fallback snapshot restoration");
                     arpRestore.captureTrustedSnapshot(MainActivity.this, sessionKey, d.ip, d.mac);
                     arpRestore.flushAndRestoreFast(sessionKey);
                 }
 
-                // 3. UI UPDATE
                 mainHandler.post(() -> {
-                    if (killedManager != null) {
-                        killedManager.removeKilledDevice(d);
-                    }
-                    if (killedFragment != null) killedFragment.refresh();
-                    updateKilledCount();
-
                     session.running = false;
                     session.stopping = false;
                     session.pid = -1;
                     d.isCut = false;
                     sessionsByDeviceId.remove(sessionKey);
                     adapter.notifyDataSetChanged();
-                    tvStatus.setText("✅ Internet restored for " + d.ip);
+                    tvStatus.setText("✅ Network restored for " + d.ip);
                     btnStop.setEnabled(false);
                     btnScan.setEnabled(true);
                     isStopping.set(false);
+                    updateKilledCount();
                 });
 
             } catch (Exception e) {
-                Log.e(TAG, "Stop session failed critically", e);
+                Log.e(TAG, "Stop session failed", e);
                 handleStopFailure(session, d, sessionKey);
             }
         }).start();

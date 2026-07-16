@@ -73,12 +73,12 @@ public class DeviceAdapter extends ArrayAdapter<Device> {
             ip.setTextColor(Color.parseColor("#F44336"));
             statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_green);
             hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_red);
-        } else if (info != null) {
-            statusBadge.setText(".....");
-            statusBadge.setTextColor(Color.parseColor("#FFBF00"));
-            ip.setTextColor(Color.parseColor("#A5C4E8"));
-            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
-            hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_red);
+//        } else if (info != null) {
+//            statusBadge.setText(".....");
+//            statusBadge.setTextColor(Color.parseColor("#FFBF00"));
+//            ip.setTextColor(Color.parseColor("#A5C4E8"));
+//            statusBadge.setBackgroundResource(R.drawable.border_for_listview_items_red);
+//            hz_bg_layout.setBackgroundResource(R.drawable.bg_for_item_view_red);
         } else {
             statusBadge.setText("Cut");
             statusBadge.setTextColor(Color.parseColor("#FF6B6B"));
