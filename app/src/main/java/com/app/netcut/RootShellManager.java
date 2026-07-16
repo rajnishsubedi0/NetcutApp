@@ -34,10 +34,6 @@ public class RootShellManager {
         return instance;
     }
 
-    public synchronized void reinitialize() {
-        closeInternal();
-        initializeShell();
-    }
 
     private synchronized void initializeShell() {
         try {
@@ -200,10 +196,4 @@ public class RootShellManager {
         isShellAvailable.set(false);
     }
 
-    public static synchronized void cleanup() {
-        if (instance != null) {
-            instance.close();
-            instance = null;
-        }
-    }
 }

@@ -742,9 +742,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // Inside MainActivity.java -> Replace the stopSession method with this:
-
-    // Replace the existing stopSession method in MainActivity.java with this optimized version
 
     private void stopSession(Device d) {
         String sessionKey = d.deviceId;
