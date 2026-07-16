@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <attr name="dividerColor" format="color" />
+    <attr name="backgroundColorWhiteDarkMode" format="color" />
+    <attr name="bgForLogView" format="color" />
+    <attr name="textForLogView" format="color" />
+    <attr name="textDefaultColor" format="color"/>
+</resources>

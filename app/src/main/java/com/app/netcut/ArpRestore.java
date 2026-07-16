@@ -9,33 +9,31 @@ import android.util.Log;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ArpRestore {
 
     private static final String TAG = "ArpRestore";
-    private static final long SHORT_CIRCUIT_MS = 200L;
+    private static final long SHORT_CIRCUIT_MS = 120L;
 
     private static ArpRestore instance;
 
     private final Object lock = new Object();
-    private final AtomicBoolean isRestoring = new AtomicBoolean(false);
-    private final ReentrantLock restoreLock = new ReentrantLock();
-
-    // trusted snapshot captured before poisoning
-    private final Map<String, String> trustedArpCache = new HashMap<>();
-    private final Map<String, String> trustedArpDevices = new HashMap<>();
-
-    private String trustedGatewayIp;
-    private String trustedGatewayMac;
-
+    private final Map<String, Snapshot> snapshots = new HashMap<>();
     private String interfaceName = "wlan0";
     private final RootShellManager shellManager;
 
-    private long lastRestoreTime = 0;
-    private boolean lastRestoreSuccess = false;
+    private final Map<String, Long> lastRestoreTimes = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> lastRestoreResults = new ConcurrentHashMap<>();
+
+    private static class Snapshot {
+        Map<String, String> arpCache = new HashMap<>();
+        Map<String, String> arpDevices = new HashMap<>();
+        String gatewayIp;
+        String gatewayMac;
+        String targetIp;
+        String targetMac;
+    }
 
     private ArpRestore() {
         this.shellManager = RootShellManager.getInstance();
@@ -48,9 +46,11 @@ public class ArpRestore {
         }
         return instance;
     }
-    public String getInterfaceName(){
+
+    public String getInterfaceName() {
         return interfaceName;
     }
+
     private void detectInterface() {
         try {
             String iface = System.getProperty("wifi.interface");
@@ -61,12 +61,14 @@ public class ArpRestore {
 
             if (shellManager != null && shellManager.isShellAvailable()) {
                 List<String> lines = shellManager.executeCommandLines("ip link show");
-                for (String line : lines) {
-                    if (line != null && line.contains("wlan")) {
-                        String[] parts = line.split(":");
-                        if (parts.length >= 2) {
-                            interfaceName = parts[1].trim().split("\\s+")[0];
-                            return;
+                if (lines != null) {
+                    for (String line : lines) {
+                        if (line != null && line.contains("wlan")) {
+                            String[] parts = line.split(":");
+                            if (parts.length >= 2) {
+                                interfaceName = parts[1].trim().split("\\s+")[0];
+                                return;
+                            }
                         }
                     }
                 }
@@ -76,161 +78,199 @@ public class ArpRestore {
         }
     }
 
-    public void captureTrustedSnapshot(Context ctx) {
+    public void captureTrustedSnapshot(Context ctx, String sessionKey, String targetIp, String targetMac) {
         synchronized (lock) {
-            trustedArpCache.clear();
-            trustedArpDevices.clear();
-            trustedGatewayIp = null;
-            trustedGatewayMac = null;
+            Snapshot s = new Snapshot();
+            s.targetIp = targetIp;
+            s.targetMac = targetMac;
 
             try {
                 String gateway = NetUtils.getGatewayIp(ctx);
-                trustedGatewayIp = gateway;
+                s.gatewayIp = gateway;
 
-                loadTrustedArpWithIpNeigh();
+                loadTrustedArpWithIpNeigh(s);
 
                 if (gateway != null) {
-                    trustedGatewayMac = trustedArpCache.get(gateway);
+                    s.gatewayMac = s.arpCache.get(gateway);
 
-                    if (trustedGatewayMac == null || trustedGatewayMac.isEmpty()) {
-                        shellManager.executeCommandBool("ping -c1 -W1 " + shQ(gateway) + " >/dev/null 2>&1");
-                        trustedArpCache.clear();
-                        trustedArpDevices.clear();
-                        loadTrustedArpWithIpNeigh();
-                        trustedGatewayMac = trustedArpCache.get(gateway);
+                    if ((s.gatewayMac == null || s.gatewayMac.isEmpty()) && shellManager != null) {
+                        shellManager.executeCommandBool("ip neigh show " + shQ(gateway) + " >/dev/null 2>&1");
+                        s.arpCache.clear();
+                        s.arpDevices.clear();
+                        loadTrustedArpWithIpNeigh(s);
+                        s.gatewayMac = s.arpCache.get(gateway);
                     }
                 }
 
-                Log.d(TAG, "Trusted snapshot captured: entries=" + trustedArpCache.size()
-                        + " gateway=" + trustedGatewayIp
-                        + " gwMac=" + trustedGatewayMac);
+                snapshots.put(sessionKey, s);
             } catch (Exception e) {
                 Log.e(TAG, "captureTrustedSnapshot failed", e);
             }
         }
     }
 
-    private void loadTrustedArpWithIpNeigh() {
+    private void loadTrustedArpWithIpNeigh(Snapshot snapshot) {
+        if (shellManager == null) return;
+
         List<String> lines = shellManager.executeCommandLines("ip neigh show");
         if (lines == null) return;
 
         for (String line : lines) {
             if (line == null || line.trim().isEmpty()) continue;
+
+            String lower = line.toLowerCase();
+            if (lower.contains(" failed") || lower.contains(" incomplete")) continue;
+
             String[] parts = line.trim().split("\\s+");
             if (parts.length < 4) continue;
 
             String ip = parts[0];
             String mac = null;
             String dev = null;
-            boolean badState = false;
 
             for (int i = 0; i < parts.length - 1; i++) {
-                if ("lladdr".equals(parts[i])) mac = parts[i + 1];
-                else if ("dev".equals(parts[i])) dev = parts[i + 1];
+                if ("lladdr".equals(parts[i])) {
+                    mac = parts[i + 1];
+                } else if ("dev".equals(parts[i])) {
+                    dev = parts[i + 1];
+                }
             }
 
-            String lower = line.toLowerCase();
-            if (lower.contains(" failed") || lower.contains(" incomplete")) {
-                badState = true;
-            }
-
-            if (!badState && mac != null
-                    && !"00:00:00:00:00:00".equalsIgnoreCase(mac)) {
-                trustedArpCache.put(ip, mac);
-                if (dev != null && !dev.isEmpty()) {
-                    trustedArpDevices.put(ip, dev);
+            if (mac != null && !"00:00:00:00:00:00".equalsIgnoreCase(mac)) {
+                snapshot.arpCache.put(ip, mac);
+                if (dev != null) {
+                    snapshot.arpDevices.put(ip, dev);
                 }
             }
         }
     }
 
-    public boolean flushAndRestoreFast() {
+    public boolean flushAndRestoreFast(String sessionKey) {
         long now = System.currentTimeMillis();
-        if (now - lastRestoreTime < SHORT_CIRCUIT_MS) {
-            return lastRestoreSuccess;
+
+        Long lastTime = lastRestoreTimes.get(sessionKey);
+        Boolean lastResult = lastRestoreResults.get(sessionKey);
+        if (lastTime != null && (now - lastTime) < SHORT_CIRCUIT_MS) {
+            return lastResult != null && lastResult;
         }
 
-        boolean locked = false;
         try {
-            locked = restoreLock.tryLock(1, TimeUnit.SECONDS);
-            if (!locked) return false;
-            if (!isRestoring.compareAndSet(false, true)) return false;
-
-            String gatewayIp;
-            String gatewayMac;
-            Map<String, String> cacheSnapshot;
-            Map<String, String> devSnapshot;
-
+            Snapshot s;
             synchronized (lock) {
-                gatewayIp = trustedGatewayIp;
-                gatewayMac = trustedGatewayMac;
-                cacheSnapshot = new HashMap<>(trustedArpCache);
-                devSnapshot = new HashMap<>(trustedArpDevices);
+                s = snapshots.get(sessionKey);
+                if (s != null) s = copySnapshot(s);
             }
 
-            if (gatewayIp == null || gatewayIp.isEmpty()) {
-                gatewayIp = NetUtils.getGatewayIp(context);
-            }
+            boolean result = (s != null) ? restoreFromSnapshot(s) : genericRestore();
 
-            if (gatewayIp == null || gatewayIp.isEmpty()) {
-                lastRestoreSuccess = false;
-                lastRestoreTime = now;
-                return false;
-            }
-
-            // kill broken neighbor entries first
-            shellManager.executeCommandBool("ip neigh del " + shQ(gatewayIp) + " dev " + shQ(interfaceName) + " 2>/dev/null || true");
-
-            // restore gateway from trusted snapshot if available
-            if (gatewayMac != null && !gatewayMac.isEmpty()) {
-                String gwDev = devSnapshot.get(gatewayIp);
-                if (gwDev == null || gwDev.isEmpty()) gwDev = interfaceName;
-
-                shellManager.executeCommandBool(
-                        "ip neigh replace " + shQ(gatewayIp) +
-                                " lladdr " + shQ(gatewayMac) +
-                                " dev " + shQ(gwDev) +
-                                " nud reachable 2>/dev/null"
-                );
-            }
-
-            // trigger fresh resolution / connectivity
-            shellManager.executeCommandBool("ping -c1 -W1 " + shQ(gatewayIp) + " >/dev/null 2>&1 || true");
-
-            // optionally restore other known entries
-            StringBuilder cmd = new StringBuilder();
-            for (Map.Entry<String, String> entry : cacheSnapshot.entrySet()) {
-                String ip = entry.getKey();
-                String mac = entry.getValue();
-
-                if (ip.equals(gatewayIp)) continue;
-
-                String dev = devSnapshot.get(ip);
-                if (dev == null || dev.isEmpty()) dev = interfaceName;
-
-                cmd.append("ip neigh replace ")
-                        .append(shQ(ip)).append(" lladdr ")
-                        .append(shQ(mac)).append(" dev ")
-                        .append(shQ(dev)).append(" nud reachable 2>/dev/null || true; ");
-            }
-
-            if (cmd.length() > 0) {
-                shellManager.executeCommandBool(cmd.toString());
-            }
-
-            lastRestoreSuccess = true;
-            lastRestoreTime = now;
-            return true;
-
+            lastRestoreTimes.put(sessionKey, now);
+            lastRestoreResults.put(sessionKey, result);
+            return result;
         } catch (Exception e) {
             Log.e(TAG, "flushAndRestoreFast failed", e);
-            lastRestoreSuccess = false;
+            lastRestoreTimes.put(sessionKey, now);
+            lastRestoreResults.put(sessionKey, false);
             return false;
-        } finally {
-            isRestoring.set(false);
-            if (locked) {
-                try { restoreLock.unlock(); } catch (Exception ignored) {}
+        }
+    }
+
+    private boolean restoreFromSnapshot(Snapshot s) {
+        if (shellManager == null || !shellManager.isShellAvailable()) return false;
+
+        boolean didSomething = false;
+
+        String gatewayIp = s.gatewayIp;
+        if (gatewayIp == null || gatewayIp.isEmpty()) {
+            try {
+                gatewayIp = NetUtils.getGatewayIp(context);
+            } catch (Exception ignored) {
             }
         }
+
+        if (gatewayIp != null && s.gatewayMac != null && !s.gatewayMac.isEmpty()) {
+            String gwDev = s.arpDevices.getOrDefault(gatewayIp, interfaceName);
+            boolean ok = shellManager.executeCommandBool(
+                    "ip neigh replace " + shQ(gatewayIp) +
+                            " lladdr " + shQ(s.gatewayMac) +
+                            " dev " + shQ(gwDev) +
+                            " nud reachable"
+            );
+            didSomething = didSomething || ok;
+        }
+
+        if (s.targetIp != null && !s.targetIp.isEmpty()
+                && s.targetMac != null && !s.targetMac.isEmpty()) {
+            String targetDev = s.arpDevices.getOrDefault(s.targetIp, interfaceName);
+            boolean ok = shellManager.executeCommandBool(
+                    "ip neigh replace " + shQ(s.targetIp) +
+                            " lladdr " + shQ(s.targetMac) +
+                            " dev " + shQ(targetDev) +
+                            " nud reachable"
+            );
+            didSomething = didSomething || ok;
+        }
+
+        return didSomething;
+    }
+
+    private boolean genericRestore() {
+        try {
+            if (shellManager == null || !shellManager.isShellAvailable()) return false;
+
+            String gatewayIp = NetUtils.getGatewayIp(context);
+            if (gatewayIp == null || gatewayIp.isEmpty()) return false;
+
+            List<String> lines = shellManager.executeCommandLines("ip neigh show " + shQ(gatewayIp));
+            if (lines == null || lines.isEmpty()) return false;
+
+            for (String line : lines) {
+                if (line == null || !line.contains("lladdr")) continue;
+
+                String[] parts = line.trim().split("\\s+");
+                String mac = null;
+                String dev = interfaceName;
+
+                for (int i = 0; i < parts.length - 1; i++) {
+                    if ("lladdr".equals(parts[i])) {
+                        mac = parts[i + 1];
+                    } else if ("dev".equals(parts[i])) {
+                        dev = parts[i + 1];
+                    }
+                }
+
+                if (mac != null && !"00:00:00:00:00:00".equalsIgnoreCase(mac)) {
+                    return shellManager.executeCommandBool(
+                            "ip neigh replace " + shQ(gatewayIp) +
+                                    " lladdr " + shQ(mac) +
+                                    " dev " + shQ(dev) +
+                                    " nud reachable"
+                    );
+                }
+            }
+
+            return false;
+        } catch (Exception e) {
+            Log.e(TAG, "genericRestore failed", e);
+            return false;
+        }
+    }
+
+    public void removeSnapshot(String sessionKey) {
+        synchronized (lock) {
+            snapshots.remove(sessionKey);
+        }
+        lastRestoreTimes.remove(sessionKey);
+        lastRestoreResults.remove(sessionKey);
+    }
+
+    private Snapshot copySnapshot(Snapshot src) {
+        Snapshot s = new Snapshot();
+        s.gatewayIp = src.gatewayIp;
+        s.gatewayMac = src.gatewayMac;
+        s.targetIp = src.targetIp;
+        s.targetMac = src.targetMac;
+        s.arpCache = new HashMap<>(src.arpCache);
+        s.arpDevices = new HashMap<>(src.arpDevices);
+        return s;
     }
 }

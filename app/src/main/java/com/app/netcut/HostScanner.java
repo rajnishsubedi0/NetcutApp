@@ -30,12 +30,7 @@ public class HostScanner {
         shellManager = RootShellManager.getInstance();
     }
 
-    public void cancel() {
-        cancelled = true;
-        if (scanThread != null) {
-            scanThread.interrupt();
-        }
-    }
+
 
     public void scan(Context ctx, ScanCallback cb) {
         if (scanThread != null && scanThread.isAlive()) {

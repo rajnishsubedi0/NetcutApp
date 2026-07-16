@@ -11,10 +11,17 @@ import java.io.IOException;
 import java.io.InputStream;
 
 public class ExtractFile {
-    public void extractTheFile (Context context,int rawResId,String fileName) throws IOException{
+    public void extractTheFile(Context context, int rawResId, String fileName) throws IOException {
         File targetFile = new File(context.getFilesDir(), fileName);
-        String path=context.getFilesDir().getAbsolutePath();
+        String path = context.getFilesDir().getAbsolutePath();
         Log.e(TAG, path);
+
+        // Check if file already exists - if so, skip extraction
+        if (targetFile.exists()) {
+            Log.e(TAG, "File already exists: " + fileName + " - Skipping extraction");
+            return;
+        }
+
         try (InputStream input = context.getResources().openRawResource(rawResId);
              FileOutputStream output = new FileOutputStream(targetFile)) {
 
@@ -22,11 +29,14 @@ public class ExtractFile {
             int bytesRead;
             while ((bytesRead = input.read(buffer)) != -1) {
                 output.write(buffer, 0, bytesRead);
-                Log.e(TAG,"Netcut binary Extracted successfully");
             }
-        } catch (IOException e){
-            Log.e(TAG,"unable to extract");
+
+            // Log success message only ONCE after extraction is complete
+            Log.e(TAG, "Netcut binary Extracted successfully");
+
+        } catch (IOException e) {
+            Log.e(TAG, "Unable to extract: " + e.getMessage());
+            throw e; // Re-throw to let caller know extraction failed
         }
-
-
-    }}
+    }
+}
